@@ -37,6 +37,7 @@ import './components/canvas/canvas-overlay.js';
 import './components/panels/layers-panel.js';
 import './components/panels/color-panel.js';
 import './components/panels/history-panel.js';
+import './components/panels/brushes-panel.js';
 
 /**
  * Main Photo Editor Application

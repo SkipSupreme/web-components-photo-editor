@@ -4,6 +4,8 @@
 
 import { BaseTool } from '../base-tool.js';
 import { BrushEngine } from './brush-engine.js';
+import { getBrushPresetManager, BrushTipShape } from './brush-presets.js';
+import { getBrushTipManager } from './brush-tips.js';
 import { getStore } from '../../core/store.js';
 import { getEventBus, Events } from '../../core/event-bus.js';
 import { Command, executeCommand, getHistory } from '../../core/commands.js';
@@ -87,6 +89,8 @@ export class BrushTool extends BaseTool {
     super('brush');
 
     this.engine = new BrushEngine();
+    this.presetManager = null;
+    this.tipManager = null;
     this.store = null;
     this.eventBus = null;
 
@@ -99,15 +103,72 @@ export class BrushTool extends BaseTool {
     this.strokeLayerId = null;
     this.beforeImageData = null;
     this.strokeBounds = null;
+
+    // Current brush settings (from preset + overrides)
+    this.currentBrush = null;
+
+    // Custom tip (if using one)
+    this.customTip = null;
   }
 
   onActivate() {
     super.onActivate();
     this.store = getStore();
     this.eventBus = getEventBus();
+    this.presetManager = getBrushPresetManager();
+    this.tipManager = getBrushTipManager();
 
     // Load options from store
     this.options = { ...this.store.state.tools.options.brush };
+
+    // Get active preset and apply dynamics to engine
+    this.loadActivePreset();
+  }
+
+  loadActivePreset() {
+    const preset = this.presetManager.getActivePreset();
+    if (preset) {
+      this.currentBrush = {
+        tipShape: preset.tipShape,
+        tipId: preset.tipImage, // Custom tip ID if set
+        size: this.options.size ?? preset.size,
+        hardness: this.options.hardness ?? preset.hardness,
+        opacity: this.options.opacity ?? preset.opacity,
+        flow: this.options.flow ?? preset.flow,
+        spacing: preset.spacing,
+        angle: preset.angle,
+        roundness: preset.roundness,
+        dynamics: { ...preset.dynamics },
+        transfer: { ...preset.transfer }
+      };
+
+      // Load custom tip if specified
+      if (preset.tipShape === BrushTipShape.CUSTOM && preset.tipImage) {
+        this.customTip = this.tipManager.getTip(preset.tipImage);
+      } else {
+        this.customTip = null;
+      }
+
+      // Apply dynamics to engine
+      this.engine.setDynamics(preset.dynamics);
+      this.engine.setSpacing(preset.spacing / 100);
+    } else {
+      // Fallback to basic brush
+      this.currentBrush = {
+        tipShape: BrushTipShape.ROUND,
+        tipId: null,
+        size: this.options.size ?? 20,
+        hardness: this.options.hardness ?? 100,
+        opacity: this.options.opacity ?? 100,
+        flow: this.options.flow ?? 100,
+        spacing: 25,
+        angle: 0,
+        roundness: 100,
+        dynamics: { sizePressure: true },
+        transfer: {}
+      };
+      this.customTip = null;
+    }
   }
 
   onPointerDown(event) {
@@ -121,15 +182,23 @@ export class BrushTool extends BaseTool {
     this.strokePoints = [];
     this.strokeLayerId = layer.id;
 
+    // Reload preset in case it changed
+    this.options = { ...this.store.state.tools.options.brush };
+    this.loadActivePreset();
+
+    // Reset the engine for a new stroke
+    this.engine.resetStroke();
+
     // Store before state for undo
     this.beforeImageData = layer.ctx.getImageData(0, 0, layer.width, layer.height);
 
     // Initialize stroke bounds
+    const brushSize = this.currentBrush.size;
     this.strokeBounds = {
-      x: Math.floor(event.x - this.options.size),
-      y: Math.floor(event.y - this.options.size),
-      width: Math.ceil(this.options.size * 2),
-      height: Math.ceil(this.options.size * 2)
+      x: Math.floor(event.x - brushSize),
+      y: Math.floor(event.y - brushSize),
+      width: Math.ceil(brushSize * 2),
+      height: Math.ceil(brushSize * 2)
     };
 
     // Process first point
@@ -137,8 +206,8 @@ export class BrushTool extends BaseTool {
     this.strokePoints.push(point);
     this.lastPoint = point;
 
-    // Draw initial dab
-    this.drawDab(layer, point);
+    // Draw initial dab(s) with dynamics
+    this.drawDabsWithDynamics(layer, point, null);
 
     layer.dirty = true;
     this.eventBus.emit(Events.RENDER_REQUEST);
@@ -157,11 +226,15 @@ export class BrushTool extends BaseTool {
     const point = this.engine.processPoint(event);
 
     // Interpolate between last point and current point
-    const interpolatedPoints = this.engine.interpolate(this.lastPoint, point);
+    const interpolatedPoints = this.engine.interpolate(
+      this.lastPoint,
+      point,
+      this.currentBrush.size
+    );
 
     for (const p of interpolatedPoints) {
-      this.drawDab(layer, p);
-      this.expandBounds(p);
+      this.drawDabsWithDynamics(layer, p, this.lastPoint);
+      this.expandBounds(p, this.currentBrush.size);
     }
 
     this.strokePoints.push(point);
@@ -223,31 +296,77 @@ export class BrushTool extends BaseTool {
     this.beforeImageData = null;
   }
 
-  drawDab(layer, point) {
+  /**
+   * Draw multiple dabs with dynamics (scatter, jitter, etc.)
+   */
+  drawDabsWithDynamics(layer, point, lastPoint) {
+    const brush = this.currentBrush;
+
+    // Get all dabs to draw with dynamics applied
+    const dabs = this.engine.processPointWithDynamics(
+      point,
+      lastPoint,
+      brush.size,
+      brush.opacity,
+      brush.flow,
+      brush.angle,
+      brush.roundness
+    );
+
+    // Draw each dab
+    for (const dab of dabs) {
+      this.drawDab(layer, dab);
+      this.expandBounds(dab, dab.size);
+    }
+  }
+
+  drawDab(layer, dab) {
     const ctx = layer.ctx;
     const color = this.store.state.colors.foreground;
-    const size = this.options.size * (this.options.pressureSize ? point.pressure : 1);
-    const opacity = (this.options.opacity / 100) *
-                   (this.options.pressureOpacity ? point.pressure : 1);
-    const hardness = this.options.hardness / 100;
+    const hardness = this.currentBrush.hardness / 100;
+    const tipShape = this.currentBrush.tipShape;
 
+    const size = dab.size;
+    const opacity = dab.opacity / 100;
+    const angle = dab.angle || 0;
+    const roundness = (dab.roundness || 100) / 100;
     const radius = size / 2;
 
+    // Use custom tip if available
+    if (tipShape === BrushTipShape.CUSTOM && this.customTip) {
+      this.customTip.draw(ctx, dab.x, dab.y, size, color, opacity, angle, roundness);
+      return;
+    }
+
+    // Standard brush shapes
     ctx.save();
+    ctx.translate(dab.x, dab.y);
+    ctx.rotate(angle * Math.PI / 180);
 
     if (hardness >= 0.99) {
       // Hard brush
       ctx.globalAlpha = opacity;
       ctx.fillStyle = color;
       ctx.beginPath();
-      ctx.arc(point.x, point.y, radius, 0, Math.PI * 2);
+
+      if (tipShape === BrushTipShape.ROUND) {
+        ctx.ellipse(0, 0, radius, radius * roundness, 0, 0, Math.PI * 2);
+      } else if (tipShape === BrushTipShape.SQUARE) {
+        ctx.rect(-radius, -radius * roundness, size, size * roundness);
+      } else if (tipShape === BrushTipShape.DIAMOND) {
+        ctx.moveTo(0, -radius * roundness);
+        ctx.lineTo(radius, 0);
+        ctx.lineTo(0, radius * roundness);
+        ctx.lineTo(-radius, 0);
+        ctx.closePath();
+      } else {
+        // Default to round
+        ctx.arc(0, 0, radius, 0, Math.PI * 2);
+      }
       ctx.fill();
     } else {
       // Soft brush with radial gradient
-      const gradient = ctx.createRadialGradient(
-        point.x, point.y, 0,
-        point.x, point.y, radius
-      );
+      const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, radius);
 
       // Parse color to RGB
       const rgb = this.hexToRgb(color);
@@ -260,14 +379,21 @@ export class BrushTool extends BaseTool {
       gradient.addColorStop(1, outerColor);
 
       ctx.fillStyle = gradient;
-      ctx.fillRect(point.x - radius, point.y - radius, size, size);
+
+      if (roundness < 1) {
+        // Apply roundness by scaling
+        ctx.scale(1, roundness);
+        ctx.fillRect(-radius, -radius, size, size);
+      } else {
+        ctx.fillRect(-radius, -radius, size, size);
+      }
     }
 
     ctx.restore();
   }
 
-  expandBounds(point) {
-    const padding = this.options.size;
+  expandBounds(point, brushSize) {
+    const padding = brushSize || this.currentBrush.size;
     const minX = Math.floor(point.x - padding);
     const minY = Math.floor(point.y - padding);
     const maxX = Math.ceil(point.x + padding);

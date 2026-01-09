@@ -15,6 +15,67 @@ export class BrushEngine {
 
     // Accumulated distance for spacing calculation
     this.accumulatedDistance = 0;
+
+    // Random seed for consistent jitter per stroke
+    this.seed = Math.random();
+
+    // Dynamics settings (can be set from preset)
+    this.dynamics = {
+      sizeJitter: 0,
+      sizePressure: true,
+      sizeMinimum: 0,
+      opacityJitter: 0,
+      opacityPressure: false,
+      flowJitter: 0,
+      flowPressure: false,
+      angleJitter: 0,
+      anglePressure: false,
+      roundnessJitter: 0,
+      roundnessPressure: false,
+      scatter: 0,
+      scatterBothAxes: false,
+      count: 1,
+      countJitter: 0
+    };
+  }
+
+  /**
+   * Seeded random number generator for reproducible jitter
+   */
+  seededRandom() {
+    const x = Math.sin(this.seed++) * 10000;
+    return x - Math.floor(x);
+  }
+
+  /**
+   * Get a random value in range [-1, 1]
+   */
+  randomRange() {
+    return (this.seededRandom() - 0.5) * 2;
+  }
+
+  /**
+   * Apply jitter to a value
+   */
+  applyJitter(value, jitterPercent, minimum = 0) {
+    if (jitterPercent <= 0) return value;
+    const jitterAmount = value * (jitterPercent / 100) * this.randomRange();
+    return Math.max(minimum, value + jitterAmount);
+  }
+
+  /**
+   * Apply pressure to a value
+   */
+  applyPressure(value, pressure, applyPressure, minimum = 0) {
+    if (!applyPressure) return value;
+    return minimum + (value - minimum) * pressure;
+  }
+
+  /**
+   * Set dynamics from a brush preset
+   */
+  setDynamics(dynamics) {
+    this.dynamics = { ...this.dynamics, ...dynamics };
   }
 
   /**
@@ -182,5 +243,133 @@ export class BrushEngine {
    */
   resetStroke() {
     this.accumulatedDistance = 0;
+    this.seed = Math.random();
+  }
+
+  /**
+   * Calculate dab properties with dynamics applied
+   */
+  calculateDabProperties(point, baseSize, baseOpacity, baseFlow, baseAngle, baseRoundness) {
+    const d = this.dynamics;
+    const pressure = point.pressure;
+
+    // Size with pressure and jitter
+    let size = baseSize;
+    size = this.applyPressure(size, pressure, d.sizePressure, baseSize * (d.sizeMinimum / 100));
+    size = this.applyJitter(size, d.sizeJitter, 1);
+
+    // Opacity with pressure and jitter
+    let opacity = baseOpacity;
+    opacity = this.applyPressure(opacity, pressure, d.opacityPressure, 0);
+    opacity = this.applyJitter(opacity, d.opacityJitter, 0);
+    opacity = Math.max(0, Math.min(100, opacity));
+
+    // Flow with pressure and jitter
+    let flow = baseFlow;
+    flow = this.applyPressure(flow, pressure, d.flowPressure, 0);
+    flow = this.applyJitter(flow, d.flowJitter, 0);
+    flow = Math.max(0, Math.min(100, flow));
+
+    // Angle with direction and jitter
+    let angle = baseAngle;
+    if (d.anglePressure && point.direction !== undefined) {
+      angle = point.direction * (180 / Math.PI);
+    }
+    if (d.angleJitter > 0) {
+      angle += d.angleJitter * this.randomRange();
+    }
+
+    // Roundness with pressure and jitter
+    let roundness = baseRoundness;
+    roundness = this.applyPressure(roundness, pressure, d.roundnessPressure, 0);
+    roundness = this.applyJitter(roundness, d.roundnessJitter, 10);
+    roundness = Math.max(10, Math.min(100, roundness));
+
+    return { size, opacity, flow, angle, roundness };
+  }
+
+  /**
+   * Calculate scatter offset for a dab
+   */
+  calculateScatter(baseSize) {
+    const d = this.dynamics;
+    if (d.scatter <= 0) return { dx: 0, dy: 0 };
+
+    const scatterAmount = baseSize * (d.scatter / 100);
+
+    let dx = 0;
+    let dy = 0;
+
+    if (d.scatterBothAxes) {
+      dx = scatterAmount * this.randomRange();
+      dy = scatterAmount * this.randomRange();
+    } else {
+      // Scatter perpendicular to stroke direction only
+      dy = scatterAmount * this.randomRange();
+    }
+
+    return { dx, dy };
+  }
+
+  /**
+   * Get the number of dabs to draw (for count jitter)
+   */
+  getDabCount() {
+    const d = this.dynamics;
+    let count = d.count;
+    if (d.countJitter > 0) {
+      const jitter = Math.round(count * (d.countJitter / 100) * this.seededRandom());
+      count = Math.max(1, count + jitter);
+    }
+    return count;
+  }
+
+  /**
+   * Generate multiple dab positions with scatter
+   */
+  generateDabPositions(point, baseSize) {
+    const count = this.getDabCount();
+    const dabs = [];
+
+    for (let i = 0; i < count; i++) {
+      const scatter = this.calculateScatter(baseSize);
+      dabs.push({
+        x: point.x + scatter.dx,
+        y: point.y + scatter.dy,
+        pressure: point.pressure,
+        tiltX: point.tiltX,
+        tiltY: point.tiltY
+      });
+    }
+
+    return dabs;
+  }
+
+  /**
+   * Process a point and return all dabs to draw
+   * This includes scatter and count dynamics
+   */
+  processPointWithDynamics(point, lastPoint, baseSize, baseOpacity, baseFlow, baseAngle, baseRoundness) {
+    // Calculate direction from last point if available
+    if (lastPoint) {
+      const dx = point.x - lastPoint.x;
+      const dy = point.y - lastPoint.y;
+      point.direction = Math.atan2(dy, dx);
+    }
+
+    // Generate multiple dab positions
+    const dabPositions = this.generateDabPositions(point, baseSize);
+
+    // Calculate properties for each dab
+    return dabPositions.map(pos => {
+      const props = this.calculateDabProperties(
+        pos, baseSize, baseOpacity, baseFlow, baseAngle, baseRoundness
+      );
+      return {
+        x: pos.x,
+        y: pos.y,
+        ...props
+      };
+    });
   }
 }
