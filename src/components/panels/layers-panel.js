@@ -68,9 +68,10 @@ template.innerHTML = `
       align-items: center;
       padding: 6px 8px;
       gap: 8px;
-      cursor: pointer;
+      cursor: grab;
       border-bottom: 1px solid var(--border-color);
-      transition: background-color 0.15s;
+      transition: background-color 0.15s, transform 0.15s, box-shadow 0.15s;
+      user-select: none;
     }
 
     .layer-item:hover {
@@ -79,6 +80,52 @@ template.innerHTML = `
 
     .layer-item.selected {
       background: var(--layer-selected);
+    }
+
+    .layer-item.dragging {
+      opacity: 0.8;
+      transform: scale(1.02);
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      cursor: grabbing;
+      z-index: 100;
+    }
+
+    .layer-item.drag-over {
+      border-top: 2px solid var(--accent-color);
+    }
+
+    .layer-item.drag-over-bottom {
+      border-bottom: 2px solid var(--accent-color);
+    }
+
+    .layer-group {
+      margin-left: 16px;
+    }
+
+    .group-header {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .group-toggle {
+      width: 16px;
+      height: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+    }
+
+    .group-toggle svg {
+      width: 12px;
+      height: 12px;
+      fill: var(--text-secondary);
+      transition: transform 0.15s;
+    }
+
+    .group-toggle.collapsed svg {
+      transform: rotate(-90deg);
     }
 
     .layer-visibility {
@@ -230,6 +277,11 @@ export class LayersPanel extends HTMLElement {
     this.store = null;
     this.eventBus = null;
     this.unsubscribers = [];
+
+    // Drag state
+    this.draggedLayerId = null;
+    this.dragOverLayerId = null;
+    this.dragPosition = null; // 'above' or 'below'
   }
 
   connectedCallback() {
@@ -286,6 +338,107 @@ export class LayersPanel extends HTMLElement {
         this.selectLayer(layerItem.dataset.id);
       }
     });
+
+    // Drag and drop for layer reordering
+    layersList.addEventListener('pointerdown', (e) => {
+      const layerItem = e.target.closest('.layer-item');
+      if (!layerItem || e.target.closest('.layer-visibility')) return;
+
+      this.draggedLayerId = layerItem.dataset.id;
+      layerItem.classList.add('dragging');
+      layerItem.setPointerCapture(e.pointerId);
+    });
+
+    layersList.addEventListener('pointermove', (e) => {
+      if (!this.draggedLayerId) return;
+
+      const layerItem = e.target.closest('.layer-item');
+      if (!layerItem || layerItem.dataset.id === this.draggedLayerId) {
+        this.clearDragOver();
+        return;
+      }
+
+      // Determine if above or below center
+      const rect = layerItem.getBoundingClientRect();
+      const midY = rect.top + rect.height / 2;
+      const position = e.clientY < midY ? 'above' : 'below';
+
+      if (this.dragOverLayerId !== layerItem.dataset.id || this.dragPosition !== position) {
+        this.clearDragOver();
+        this.dragOverLayerId = layerItem.dataset.id;
+        this.dragPosition = position;
+
+        layerItem.classList.add(position === 'above' ? 'drag-over' : 'drag-over-bottom');
+      }
+    });
+
+    layersList.addEventListener('pointerup', (e) => {
+      if (!this.draggedLayerId) return;
+
+      const draggedItem = layersList.querySelector(`[data-id="${this.draggedLayerId}"]`);
+      if (draggedItem) {
+        draggedItem.classList.remove('dragging');
+      }
+
+      // Perform the move if we have a valid target
+      if (this.dragOverLayerId && this.draggedLayerId !== this.dragOverLayerId) {
+        this.moveLayer(this.draggedLayerId, this.dragOverLayerId, this.dragPosition);
+      }
+
+      this.clearDragOver();
+      this.draggedLayerId = null;
+    });
+
+    layersList.addEventListener('pointercancel', () => {
+      this.clearDragState();
+    });
+  }
+
+  clearDragOver() {
+    const items = this.shadowRoot.querySelectorAll('.drag-over, .drag-over-bottom');
+    items.forEach(item => {
+      item.classList.remove('drag-over', 'drag-over-bottom');
+    });
+    this.dragOverLayerId = null;
+    this.dragPosition = null;
+  }
+
+  clearDragState() {
+    this.clearDragOver();
+    const draggedItem = this.shadowRoot.querySelector('.dragging');
+    if (draggedItem) {
+      draggedItem.classList.remove('dragging');
+    }
+    this.draggedLayerId = null;
+  }
+
+  moveLayer(draggedId, targetId, position) {
+    const app = window.photoEditorApp;
+    if (!app || !app.document) return;
+
+    const doc = app.document;
+    const draggedIndex = doc.layers.findIndex(l => l.id === draggedId);
+    const targetIndex = doc.layers.findIndex(l => l.id === targetId);
+
+    if (draggedIndex === -1 || targetIndex === -1) return;
+
+    // Calculate new index (remember: UI shows layers in reverse order)
+    // In UI: top layer is first, in array: top layer is last
+    let newIndex = targetIndex;
+    if (position === 'above') {
+      // Moving above in UI = moving to higher index in array
+      newIndex = targetIndex + 1;
+    }
+
+    // Adjust if dragging from above the target
+    if (draggedIndex > targetIndex) {
+      newIndex = position === 'above' ? targetIndex + 1 : targetIndex;
+    } else {
+      newIndex = position === 'above' ? targetIndex : targetIndex - 1;
+    }
+
+    doc.moveLayer(draggedId, newIndex);
+    this.eventBus.emit(Events.RENDER_REQUEST);
   }
 
   subscribeToState() {

@@ -24,6 +24,8 @@ import { RectangularMarqueeTool, EllipticalMarqueeTool } from './tools/selection
 import { LassoTool, PolygonalLassoTool } from './tools/selection/lasso-tool.js';
 import { MagicWandTool } from './tools/selection/magic-wand-tool.js';
 import { TransformTool } from './tools/transform-tool.js';
+import { GradientTool } from './tools/gradient-tool.js';
+import { CropTool } from './tools/crop-tool.js';
 
 // Document
 import { Selection } from './document/selection.js';
@@ -116,6 +118,10 @@ class PhotoEditorApp {
     // Transform tools
     this.toolManager.register('move', new MoveTool());
     this.toolManager.register('transform', new TransformTool());
+    this.toolManager.register('crop', new CropTool());
+
+    // Gradient tool
+    this.toolManager.register('gradient', new GradientTool());
   }
 
   /**
