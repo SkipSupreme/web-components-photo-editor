@@ -20,10 +20,18 @@ import { EraserTool } from './tools/eraser-tool.js';
 import { MoveTool } from './tools/move-tool.js';
 import { EyedropperTool } from './tools/eyedropper-tool.js';
 import { FillTool } from './tools/fill-tool.js';
+import { RectangularMarqueeTool, EllipticalMarqueeTool } from './tools/selection/marquee-tool.js';
+import { LassoTool, PolygonalLassoTool } from './tools/selection/lasso-tool.js';
+import { MagicWandTool } from './tools/selection/magic-wand-tool.js';
+import { TransformTool } from './tools/transform-tool.js';
+
+// Document
+import { Selection } from './document/selection.js';
 
 // Components
 import './components/app-shell.js';
 import './components/canvas/editor-canvas.js';
+import './components/canvas/canvas-overlay.js';
 import './components/panels/layers-panel.js';
 import './components/panels/color-panel.js';
 import './components/panels/history-panel.js';
@@ -39,6 +47,7 @@ class PhotoEditorApp {
     this.shortcuts = null;
     this.toolManager = null;
     this.document = null;
+    this.selection = null;
   }
 
   /**
@@ -91,12 +100,22 @@ class PhotoEditorApp {
    * Register all tools
    */
   registerTools() {
+    // Paint tools
     this.toolManager.register('brush', new BrushTool());
     this.toolManager.register('eraser', new EraserTool());
-    this.toolManager.register('move', new MoveTool());
-    this.toolManager.register('eyedropper', new EyedropperTool());
     this.toolManager.register('fill', new FillTool());
-    // Additional tools can be registered here
+    this.toolManager.register('eyedropper', new EyedropperTool());
+
+    // Selection tools
+    this.toolManager.register('marquee', new RectangularMarqueeTool());
+    this.toolManager.register('ellipticalMarquee', new EllipticalMarqueeTool());
+    this.toolManager.register('lasso', new LassoTool());
+    this.toolManager.register('polygonalLasso', new PolygonalLassoTool());
+    this.toolManager.register('magicWand', new MagicWandTool());
+
+    // Transform tools
+    this.toolManager.register('move', new MoveTool());
+    this.toolManager.register('transform', new TransformTool());
   }
 
   /**
