@@ -1,0 +1,50 @@
+/* Light theme */
+:root {
+  /* Backgrounds */
+  --bg-primary: #f5f5f5;
+  --bg-secondary: #e8e8e8;
+  --bg-panel: #ffffff;
+  --bg-input: #ffffff;
+  --bg-hover: rgba(0, 0, 0, 0.05);
+  --bg-active: rgba(0, 0, 0, 0.1);
+  --bg-tooltip: #333333;
+  --bg-canvas: #c0c0c0;
+
+  /* Text */
+  --text-primary: #1a1a1a;
+  --text-secondary: #666666;
+  --text-disabled: #999999;
+
+  /* Borders */
+  --border-color: #d0d0d0;
+  --border-light: #e0e0e0;
+
+  /* Accent */
+  --accent-color: #0078d4;
+  --accent-hover: #1084d8;
+  --accent-active: #006cbd;
+
+  /* Status */
+  --color-success: #4caf50;
+  --color-warning: #ff9800;
+  --color-error: #f44336;
+
+  /* Layers panel */
+  --layer-selected: rgba(0, 120, 212, 0.2);
+  --layer-hover: rgba(0, 0, 0, 0.03);
+
+  /* Selection */
+  --selection-color: rgba(0, 120, 212, 0.3);
+  --marching-ants-color: #000000;
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.1);
+  --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.15);
+  --shadow-lg: 0 8px 16px rgba(0, 0, 0, 0.2);
+
+  /* Panel sizes */
+  --toolbar-height: 40px;
+  --left-panel-width: 48px;
+  --right-panel-width: 280px;
+  --status-bar-height: 24px;
+}
