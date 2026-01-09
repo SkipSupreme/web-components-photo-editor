@@ -5,6 +5,8 @@
 import { getStore } from '../../core/store.js';
 import { getEventBus, Events } from '../../core/event-bus.js';
 import { getMaskManager } from '../../document/mask.js';
+import { createAdjustmentLayer } from '../../document/layer.js';
+import { AdjustmentType, AdjustmentDefaults } from '../../effects/adjustments/adjustment-layer.js';
 
 const template = document.createElement('template');
 template.innerHTML = `
@@ -330,6 +332,82 @@ template.innerHTML = `
     .layer-item {
       position: relative;
     }
+
+    /* Adjustment layer styles */
+    .layer-item.adjustment {
+      background: linear-gradient(to right, rgba(128, 0, 255, 0.1), transparent);
+    }
+
+    .layer-item.adjustment .layer-thumbnail {
+      background: linear-gradient(135deg, #8b5cf6, #6366f1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .layer-item.adjustment .layer-thumbnail svg {
+      width: 20px;
+      height: 20px;
+      fill: white;
+    }
+
+    .adjustment-type-badge {
+      font-size: 9px;
+      color: #a78bfa;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    /* Adjustment dropdown menu */
+    .adjustment-menu {
+      position: relative;
+    }
+
+    .adjustment-dropdown {
+      position: absolute;
+      top: 100%;
+      right: 0;
+      min-width: 180px;
+      background: var(--bg-panel);
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+      z-index: 1000;
+      display: none;
+      padding: 4px 0;
+    }
+
+    .adjustment-dropdown.visible {
+      display: block;
+    }
+
+    .adjustment-dropdown-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      cursor: pointer;
+      color: var(--text-primary);
+      font-size: 12px;
+      transition: background 0.15s;
+    }
+
+    .adjustment-dropdown-item:hover {
+      background: var(--bg-hover);
+    }
+
+    .adjustment-dropdown-item svg {
+      width: 16px;
+      height: 16px;
+      fill: currentColor;
+      opacity: 0.7;
+    }
+
+    .adjustment-dropdown-divider {
+      height: 1px;
+      background: var(--border-color);
+      margin: 4px 0;
+    }
   </style>
 
   <div class="panel-header">
@@ -338,6 +416,59 @@ template.innerHTML = `
       <button class="action-btn" data-action="add" title="New Layer">
         <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
       </button>
+      <div class="adjustment-menu">
+        <button class="action-btn" data-action="toggle-adjustment-menu" title="Add Adjustment Layer">
+          <svg viewBox="0 0 24 24"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8zm-5.5 9c-.83 0-1.5-.67-1.5-1.5S5.67 9 6.5 9 8 9.67 8 10.5 7.33 12 6.5 12zm3-4C8.67 8 8 7.33 8 6.5S8.67 5 9.5 5s1.5.67 1.5 1.5S10.33 8 9.5 8zm5 0c-.83 0-1.5-.67-1.5-1.5S13.67 5 14.5 5s1.5.67 1.5 1.5S15.33 8 14.5 8zm3 4c-.83 0-1.5-.67-1.5-1.5S16.67 9 17.5 9s1.5.67 1.5 1.5-.67 1.5-1.5 1.5z"/></svg>
+        </button>
+        <div class="adjustment-dropdown" id="adjustment-dropdown">
+          <div class="adjustment-dropdown-item" data-adjustment="brightness-contrast">
+            <svg viewBox="0 0 24 24"><path d="M20 15.31L23.31 12 20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69zM12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6 6 2.69 6 6-2.69 6-6 6z"/></svg>
+            Brightness/Contrast
+          </div>
+          <div class="adjustment-dropdown-item" data-adjustment="levels">
+            <svg viewBox="0 0 24 24"><path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm2 4v-2H3a2 2 0 002 2zM3 9h2V7H3v2zm12 12h2v-2h-2v2zm4-18H9a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2V5a2 2 0 00-2-2zm0 12H9V5h10v10zm-8 6h2v-2h-2v2zm-4 0h2v-2H7v2z"/></svg>
+            Levels
+          </div>
+          <div class="adjustment-dropdown-item" data-adjustment="curves">
+            <svg viewBox="0 0 24 24"><path d="M16.5 3c-2.49 0-4.5 2.01-4.5 4.5 0 .33.04.66.09.98L5.5 15.5V19h3.5l7.02-6.59c.32.05.65.09.98.09 2.49 0 4.5-2.01 4.5-4.5S18.99 3 16.5 3zm0 7c-1.38 0-2.5-1.12-2.5-2.5S15.12 5 16.5 5 19 6.12 19 7.5 17.88 10 16.5 10z"/></svg>
+            Curves
+          </div>
+          <div class="adjustment-dropdown-divider"></div>
+          <div class="adjustment-dropdown-item" data-adjustment="hue-saturation">
+            <svg viewBox="0 0 24 24"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8z"/></svg>
+            Hue/Saturation
+          </div>
+          <div class="adjustment-dropdown-item" data-adjustment="color-balance">
+            <svg viewBox="0 0 24 24"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9-4.03-9-9-9zm0 16c-3.86 0-7-3.14-7-7s3.14-7 7-7 7 3.14 7 7-3.14 7-7 7z"/></svg>
+            Color Balance
+          </div>
+          <div class="adjustment-dropdown-item" data-adjustment="vibrance">
+            <svg viewBox="0 0 24 24"><path d="M12 2C6.49 2 2 6.49 2 12s4.49 10 10 10 10-4.49 10-10S17.51 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm3-8c0 1.66-1.34 3-3 3s-3-1.34-3-3 1.34-3 3-3 3 1.34 3 3z"/></svg>
+            Vibrance
+          </div>
+          <div class="adjustment-dropdown-item" data-adjustment="photo-filter">
+            <svg viewBox="0 0 24 24"><path d="M20 4h-3.17L15 2H9L7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V6h4.05l1.83-2h4.24l1.83 2H20v12zM12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5z"/></svg>
+            Photo Filter
+          </div>
+          <div class="adjustment-dropdown-divider"></div>
+          <div class="adjustment-dropdown-item" data-adjustment="black-white">
+            <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18V4c4.41 0 8 3.59 8 8s-3.59 8-8 8z"/></svg>
+            Black & White
+          </div>
+          <div class="adjustment-dropdown-item" data-adjustment="invert">
+            <svg viewBox="0 0 24 24"><path d="M17.66 7.93L12 2.27 6.34 7.93c-3.12 3.12-3.12 8.19 0 11.31C7.9 20.8 9.95 21.58 12 21.58c2.05 0 4.1-.78 5.66-2.34 3.12-3.12 3.12-8.19 0-11.31zM12 19.59c-1.6 0-3.11-.62-4.24-1.76C6.62 16.69 6 15.19 6 13.59s.62-3.11 1.76-4.24L12 5.1v14.49z"/></svg>
+            Invert
+          </div>
+          <div class="adjustment-dropdown-item" data-adjustment="posterize">
+            <svg viewBox="0 0 24 24"><path d="M3 5H1v16c0 1.1.9 2 2 2h16v-2H3V5zm18-4H7c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V3c0-1.1-.9-2-2-2zm0 16H7V3h14v14z"/></svg>
+            Posterize
+          </div>
+          <div class="adjustment-dropdown-item" data-adjustment="threshold">
+            <svg viewBox="0 0 24 24"><path d="M12 4c4.41 0 8 3.59 8 8s-3.59 8-8 8-8-3.59-8-8 3.59-8 8-8m0-2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 14c-2.21 0-4-1.79-4-4h8c0 2.21-1.79 4-4 4z"/></svg>
+            Threshold
+          </div>
+        </div>
+      </div>
       <button class="action-btn" data-action="add-mask" title="Add Layer Mask">
         <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm0-14c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6z"/></svg>
       </button>
@@ -412,6 +543,26 @@ export class LayersPanel extends HTMLElement {
 
       const action = btn.dataset.action;
       this.handleAction(action);
+    });
+
+    // Adjustment dropdown menu
+    const adjustmentDropdown = this.shadowRoot.getElementById('adjustment-dropdown');
+
+    adjustmentDropdown.addEventListener('click', (e) => {
+      const item = e.target.closest('[data-adjustment]');
+      if (!item) return;
+
+      e.stopPropagation();
+      const adjustmentType = item.dataset.adjustment;
+      this.addAdjustmentLayer(adjustmentType);
+      adjustmentDropdown.classList.remove('visible');
+    });
+
+    // Close dropdown when clicking outside
+    document.addEventListener('click', (e) => {
+      if (!this.shadowRoot.contains(e.target)) {
+        adjustmentDropdown.classList.remove('visible');
+      }
     });
 
     // Blend mode
@@ -594,6 +745,10 @@ export class LayersPanel extends HTMLElement {
       case 'delete':
         app.deleteLayer();
         break;
+      case 'toggle-adjustment-menu':
+        const dropdown = this.shadowRoot.getElementById('adjustment-dropdown');
+        dropdown.classList.toggle('visible');
+        break;
       case 'add-mask':
         if (activeLayer && !activeLayer.mask) {
           maskManager.addMask(activeLayer.id, true);
@@ -610,6 +765,43 @@ export class LayersPanel extends HTMLElement {
         }
         break;
     }
+  }
+
+  addAdjustmentLayer(type) {
+    const app = window.photoEditorApp;
+    if (!app || !app.document) return;
+
+    const doc = app.document;
+
+    // Get default params for this adjustment type
+    const defaultParams = AdjustmentDefaults[type] || {};
+
+    // Create adjustment layer with nice name
+    const typeNames = {
+      'brightness-contrast': 'Brightness/Contrast',
+      'levels': 'Levels',
+      'curves': 'Curves',
+      'hue-saturation': 'Hue/Saturation',
+      'color-balance': 'Color Balance',
+      'vibrance': 'Vibrance',
+      'photo-filter': 'Photo Filter',
+      'black-white': 'Black & White',
+      'invert': 'Invert',
+      'posterize': 'Posterize',
+      'threshold': 'Threshold'
+    };
+
+    const layer = createAdjustmentLayer(type, { ...defaultParams });
+    layer.name = typeNames[type] || type;
+
+    // Add layer above active layer
+    const activeIndex = doc.layers.indexOf(doc.getActiveLayer());
+    doc.addLayer(layer, activeIndex + 1);
+    doc.setActiveLayer(layer.id);
+
+    // Emit event to open properties panel
+    this.eventBus.emit(Events.ADJUSTMENT_LAYER_CREATED, { layer });
+    this.eventBus.emit(Events.RENDER_REQUEST);
   }
 
   selectLayer(layerId) {
@@ -686,12 +878,17 @@ export class LayersPanel extends HTMLElement {
       const hasMask = !!layer.mask;
       const isEditingMask = editingMaskLayerId === layer.id;
       const isClipped = layer.clipped;
+      const isAdjustment = layer.type === 'adjustment';
       // Check if this is the bottom layer (can't clip to nothing)
       const isBottomLayer = index === layers.length - 1;
 
+      // Adjustment layer icon based on type
+      const adjustmentIcon = layer.adjustment ? this.getAdjustmentIcon(layer.adjustment.type) : '';
+
       return `
-      <div class="layer-item ${layer.id === activeId ? 'selected' : ''} ${isClipped ? 'clipped' : ''}"
-           data-id="${layer.id}">
+      <div class="layer-item ${layer.id === activeId ? 'selected' : ''} ${isClipped ? 'clipped' : ''} ${isAdjustment ? 'adjustment' : ''}"
+           data-id="${layer.id}"
+           data-type="${layer.type}">
         <button class="layer-visibility ${layer.visible ? '' : 'hidden'}" title="Toggle Visibility">
           <svg viewBox="0 0 24 24">
             ${layer.visible
@@ -701,7 +898,13 @@ export class LayersPanel extends HTMLElement {
           </svg>
         </button>
         <div class="layer-thumbnails">
-          <div class="layer-thumbnail" id="thumb-${layer.id}"></div>
+          ${isAdjustment ? `
+            <div class="layer-thumbnail">
+              <svg viewBox="0 0 24 24">${adjustmentIcon}</svg>
+            </div>
+          ` : `
+            <div class="layer-thumbnail" id="thumb-${layer.id}"></div>
+          `}
           ${hasMask ? `
             <span class="mask-link ${layer.maskLinked ? '' : 'unlinked'}"
                   data-action="toggle-mask-link"
@@ -719,7 +922,9 @@ export class LayersPanel extends HTMLElement {
         </div>
         <div class="layer-info">
           <div class="layer-name">${layer.name}${isClipped ? '<span class="clip-indicator">⤷</span>' : ''}</div>
-          <div class="layer-meta">${layer.blendMode}${layer.opacity < 1 ? `, ${Math.round(layer.opacity * 100)}%` : ''}${hasMask ? ' • Mask' : ''}${isClipped ? ' • Clipped' : ''}</div>
+          <div class="layer-meta">
+            ${isAdjustment ? `<span class="adjustment-type-badge">${layer.adjustment?.type || 'Adjustment'}</span>` : layer.blendMode}${layer.opacity < 1 ? `, ${Math.round(layer.opacity * 100)}%` : ''}${hasMask ? ' • Mask' : ''}${isClipped ? ' • Clipped' : ''}
+          </div>
         </div>
       </div>
     `}).join('');
@@ -779,6 +984,23 @@ export class LayersPanel extends HTMLElement {
         this.render();
         break;
     }
+  }
+
+  getAdjustmentIcon(type) {
+    const icons = {
+      'brightness-contrast': '<path d="M20 15.31L23.31 12 20 8.69V4h-4.69L12 .69 8.69 4H4v4.69L.69 12 4 15.31V20h4.69L12 23.31 15.31 20H20v-4.69zM12 18c-3.31 0-6-2.69-6-6s2.69-6 6-6 6 2.69 6 6-2.69 6-6 6z"/>',
+      'levels': '<path d="M3 13h2v-2H3v2zm0 4h2v-2H3v2zm2 4v-2H3a2 2 0 002 2zM3 9h2V7H3v2zm12 12h2v-2h-2v2zm4-18H9a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2V5a2 2 0 00-2-2zm0 12H9V5h10v10zm-8 6h2v-2h-2v2zm-4 0h2v-2H7v2z"/>',
+      'curves': '<path d="M16.5 3c-2.49 0-4.5 2.01-4.5 4.5 0 .33.04.66.09.98L5.5 15.5V19h3.5l7.02-6.59c.32.05.65.09.98.09 2.49 0 4.5-2.01 4.5-4.5S18.99 3 16.5 3zm0 7c-1.38 0-2.5-1.12-2.5-2.5S15.12 5 16.5 5 19 6.12 19 7.5 17.88 10 16.5 10z"/>',
+      'hue-saturation': '<path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9c.83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1.01-.23-.26-.38-.61-.38-.99 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8z"/>',
+      'color-balance': '<path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9-4.03-9-9-9zm0 16c-3.86 0-7-3.14-7-7s3.14-7 7-7 7 3.14 7 7-3.14 7-7 7z"/>',
+      'vibrance': '<path d="M12 2C6.49 2 2 6.49 2 12s4.49 10 10 10 10-4.49 10-10S17.51 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm3-8c0 1.66-1.34 3-3 3s-3-1.34-3-3 1.34-3 3-3 3 1.34 3 3z"/>',
+      'photo-filter': '<path d="M20 4h-3.17L15 2H9L7.17 4H4c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V6c0-1.1-.9-2-2-2zm0 14H4V6h4.05l1.83-2h4.24l1.83 2H20v12zM12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5z"/>',
+      'black-white': '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18V4c4.41 0 8 3.59 8 8s-3.59 8-8 8z"/>',
+      'invert': '<path d="M17.66 7.93L12 2.27 6.34 7.93c-3.12 3.12-3.12 8.19 0 11.31C7.9 20.8 9.95 21.58 12 21.58c2.05 0 4.1-.78 5.66-2.34 3.12-3.12 3.12-8.19 0-11.31zM12 19.59c-1.6 0-3.11-.62-4.24-1.76C6.62 16.69 6 15.19 6 13.59s.62-3.11 1.76-4.24L12 5.1v14.49z"/>',
+      'posterize': '<path d="M3 5H1v16c0 1.1.9 2 2 2h16v-2H3V5zm18-4H7c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V3c0-1.1-.9-2-2-2zm0 16H7V3h14v14z"/>',
+      'threshold': '<path d="M12 4c4.41 0 8 3.59 8 8s-3.59 8-8 8-8-3.59-8-8 3.59-8 8-8m0-2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 14c-2.21 0-4-1.79-4-4h8c0 2.21-1.79 4-4 4z"/>'
+    };
+    return icons[type] || '<path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z"/>';
   }
 }
 

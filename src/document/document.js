@@ -6,6 +6,7 @@
 import { Layer, createRasterLayer, LayerType } from './layer.js';
 import { getEventBus, Events } from '../core/event-bus.js';
 import { getStore } from '../core/store.js';
+import { createAdjustment } from '../effects/adjustments/adjustment-layer.js';
 
 let documentIdCounter = 0;
 
@@ -294,7 +295,7 @@ export class Document {
   }
 
   /**
-   * Get composited canvas with proper clipping and mask support
+   * Get composited canvas with proper clipping, mask, and adjustment layer support
    * @param {boolean} includeBackground - Include background fill
    * @returns {OffscreenCanvas} Composited canvas
    */
@@ -315,6 +316,13 @@ export class Document {
       const layer = this.layers[i];
 
       if (!layer.visible) {
+        i++;
+        continue;
+      }
+
+      // Handle adjustment layers
+      if (layer.type === LayerType.ADJUSTMENT) {
+        this.applyAdjustmentLayer(ctx, layer, canvas);
         i++;
         continue;
       }
@@ -341,6 +349,66 @@ export class Document {
     }
 
     return canvas;
+  }
+
+  /**
+   * Apply an adjustment layer to the current composite
+   */
+  applyAdjustmentLayer(ctx, layer, canvas) {
+    if (!layer.adjustment) return;
+
+    // Create the adjustment
+    const adjustment = createAdjustment(layer.adjustment.type, layer.adjustment.params);
+
+    // Get current composite as image data
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+
+    // Apply layer mask if present
+    if (layer.mask && layer.maskEnabled) {
+      // Apply adjustment only where mask is white
+      const maskData = layer.mask.getImageData();
+      const tempData = new ImageData(
+        new Uint8ClampedArray(imageData.data),
+        imageData.width,
+        imageData.height
+      );
+
+      // Apply adjustment to temp copy
+      adjustment.apply(tempData);
+
+      // Blend based on mask
+      for (let i = 0; i < imageData.data.length; i += 4) {
+        const maskValue = maskData.data[i] / 255; // 0-1
+        const blendFactor = maskValue * layer.opacity;
+
+        imageData.data[i] = imageData.data[i] + (tempData.data[i] - imageData.data[i]) * blendFactor;
+        imageData.data[i + 1] = imageData.data[i + 1] + (tempData.data[i + 1] - imageData.data[i + 1]) * blendFactor;
+        imageData.data[i + 2] = imageData.data[i + 2] + (tempData.data[i + 2] - imageData.data[i + 2]) * blendFactor;
+      }
+    } else {
+      // Apply adjustment with opacity
+      if (layer.opacity < 1) {
+        const tempData = new ImageData(
+          new Uint8ClampedArray(imageData.data),
+          imageData.width,
+          imageData.height
+        );
+
+        adjustment.apply(tempData);
+
+        // Blend based on opacity
+        for (let i = 0; i < imageData.data.length; i += 4) {
+          imageData.data[i] = imageData.data[i] + (tempData.data[i] - imageData.data[i]) * layer.opacity;
+          imageData.data[i + 1] = imageData.data[i + 1] + (tempData.data[i + 1] - imageData.data[i + 1]) * layer.opacity;
+          imageData.data[i + 2] = imageData.data[i + 2] + (tempData.data[i + 2] - imageData.data[i + 2]) * layer.opacity;
+        }
+      } else {
+        // Full opacity - apply directly
+        adjustment.apply(imageData);
+      }
+    }
+
+    ctx.putImageData(imageData, 0, 0);
   }
 
   /**

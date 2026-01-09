@@ -249,6 +249,7 @@ template.innerHTML = `
     <div class="right-panel">
       <color-panel></color-panel>
       <brushes-panel></brushes-panel>
+      <adjustments-panel></adjustments-panel>
       <layers-panel></layers-panel>
       <history-panel></history-panel>
     </div>

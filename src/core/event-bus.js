@@ -156,6 +156,10 @@ export const Events = {
   LAYER_REORDERED: 'layer:reordered',
   LAYER_VISIBILITY_CHANGED: 'layer:visibility',
 
+  // Adjustment layer events
+  ADJUSTMENT_LAYER_CREATED: 'adjustment:created',
+  ADJUSTMENT_LAYER_UPDATED: 'adjustment:updated',
+
   // Tool events
   TOOL_CHANGED: 'tool:changed',
   TOOL_OPTIONS_CHANGED: 'tool:options',
