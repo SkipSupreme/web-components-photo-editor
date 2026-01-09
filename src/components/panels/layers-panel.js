@@ -4,6 +4,7 @@
 
 import { getStore } from '../../core/store.js';
 import { getEventBus, Events } from '../../core/event-bus.js';
+import { getMaskManager } from '../../document/mask.js';
 
 const template = document.createElement('template');
 template.innerHTML = `
@@ -225,6 +226,84 @@ template.innerHTML = `
       color: var(--text-secondary);
       font-size: 12px;
     }
+
+    .mask-thumbnail {
+      width: 24px;
+      height: 24px;
+      border: 1px solid var(--border-color);
+      border-radius: 2px;
+      background: #333;
+      cursor: pointer;
+      position: relative;
+    }
+
+    .mask-thumbnail.editing {
+      border-color: var(--accent-color);
+      box-shadow: 0 0 0 1px var(--accent-color);
+    }
+
+    .mask-thumbnail.disabled {
+      opacity: 0.4;
+    }
+
+    .mask-thumbnail canvas {
+      width: 100%;
+      height: 100%;
+    }
+
+    .mask-link {
+      width: 12px;
+      height: 12px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: var(--text-secondary);
+    }
+
+    .mask-link:hover {
+      color: var(--text-primary);
+    }
+
+    .mask-link.unlinked {
+      opacity: 0.3;
+    }
+
+    .mask-link svg {
+      width: 10px;
+      height: 10px;
+      fill: currentColor;
+    }
+
+    .layer-thumbnails {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+    }
+
+    .add-mask-btn {
+      width: 24px;
+      height: 24px;
+      border: 1px dashed var(--border-color);
+      border-radius: 2px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      color: var(--text-secondary);
+      background: transparent;
+    }
+
+    .add-mask-btn:hover {
+      border-color: var(--text-secondary);
+      color: var(--text-primary);
+    }
+
+    .add-mask-btn svg {
+      width: 12px;
+      height: 12px;
+      fill: currentColor;
+    }
   </style>
 
   <div class="panel-header">
@@ -232,6 +311,9 @@ template.innerHTML = `
     <div class="panel-actions">
       <button class="action-btn" data-action="add" title="New Layer">
         <svg viewBox="0 0 24 24"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
+      </button>
+      <button class="action-btn" data-action="add-mask" title="Add Layer Mask">
+        <svg viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm0-14c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6z"/></svg>
       </button>
       <button class="action-btn" data-action="duplicate" title="Duplicate Layer">
         <svg viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></svg>
@@ -327,10 +409,18 @@ export class LayersPanel extends HTMLElement {
     layersList.addEventListener('click', (e) => {
       const layerItem = e.target.closest('.layer-item');
       const visibilityBtn = e.target.closest('.layer-visibility');
+      const maskAction = e.target.closest('[data-action]');
 
       if (visibilityBtn && layerItem) {
         e.stopPropagation();
         this.toggleLayerVisibility(layerItem.dataset.id);
+        return;
+      }
+
+      // Handle mask actions
+      if (maskAction && maskAction.dataset.layerId) {
+        e.stopPropagation();
+        this.handleMaskAction(maskAction.dataset.action, maskAction.dataset.layerId, e);
         return;
       }
 
@@ -459,6 +549,9 @@ export class LayersPanel extends HTMLElement {
     const app = window.photoEditorApp;
     if (!app || !app.document) return;
 
+    const maskManager = getMaskManager();
+    const activeLayer = app.document.getActiveLayer();
+
     switch (action) {
       case 'add':
         app.addLayer();
@@ -468,6 +561,21 @@ export class LayersPanel extends HTMLElement {
         break;
       case 'delete':
         app.deleteLayer();
+        break;
+      case 'add-mask':
+        if (activeLayer && !activeLayer.mask) {
+          maskManager.addMask(activeLayer.id, true);
+        }
+        break;
+      case 'delete-mask':
+        if (activeLayer && activeLayer.mask) {
+          maskManager.deleteMask(activeLayer.id);
+        }
+        break;
+      case 'apply-mask':
+        if (activeLayer && activeLayer.mask) {
+          maskManager.applyMask(activeLayer.id);
+        }
         break;
     }
   }
@@ -539,8 +647,14 @@ export class LayersPanel extends HTMLElement {
 
     // Render layers (reverse order - top layer first)
     const layers = [...doc.layers].reverse();
+    const maskManager = getMaskManager();
+    const editingMaskLayerId = maskManager.getEditingLayerId();
 
-    layersList.innerHTML = layers.map(layer => `
+    layersList.innerHTML = layers.map(layer => {
+      const hasMask = !!layer.mask;
+      const isEditingMask = editingMaskLayerId === layer.id;
+
+      return `
       <div class="layer-item ${layer.id === activeId ? 'selected' : ''}"
            data-id="${layer.id}">
         <button class="layer-visibility ${layer.visible ? '' : 'hidden'}" title="Toggle Visibility">
@@ -551,17 +665,34 @@ export class LayersPanel extends HTMLElement {
             }
           </svg>
         </button>
-        <div class="layer-thumbnail" id="thumb-${layer.id}"></div>
+        <div class="layer-thumbnails">
+          <div class="layer-thumbnail" id="thumb-${layer.id}"></div>
+          ${hasMask ? `
+            <span class="mask-link ${layer.maskLinked ? '' : 'unlinked'}"
+                  data-action="toggle-mask-link"
+                  data-layer-id="${layer.id}"
+                  title="${layer.maskLinked ? 'Linked' : 'Unlinked'}">
+              <svg viewBox="0 0 24 24"><path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/></svg>
+            </span>
+            <div class="mask-thumbnail ${isEditingMask ? 'editing' : ''} ${layer.maskEnabled ? '' : 'disabled'}"
+                 id="mask-thumb-${layer.id}"
+                 data-action="edit-mask"
+                 data-layer-id="${layer.id}"
+                 title="Click to edit mask, Shift+Click to disable">
+            </div>
+          ` : ''}
+        </div>
         <div class="layer-info">
           <div class="layer-name">${layer.name}</div>
-          <div class="layer-meta">${layer.blendMode}${layer.opacity < 1 ? `, ${Math.round(layer.opacity * 100)}%` : ''}</div>
+          <div class="layer-meta">${layer.blendMode}${layer.opacity < 1 ? `, ${Math.round(layer.opacity * 100)}%` : ''}${hasMask ? ' • Mask' : ''}</div>
         </div>
       </div>
-    `).join('');
+    `}).join('');
 
     // Update thumbnails
     requestAnimationFrame(() => {
       layers.forEach(layer => {
+        // Layer thumbnail
         const thumbContainer = this.shadowRoot.getElementById(`thumb-${layer.id}`);
         if (thumbContainer && layer.thumbnail) {
           thumbContainer.innerHTML = '';
@@ -572,8 +703,47 @@ export class LayersPanel extends HTMLElement {
           ctx.drawImage(layer.thumbnail, 0, 0);
           thumbContainer.appendChild(canvas);
         }
+
+        // Mask thumbnail
+        if (layer.mask && layer.mask.thumbnail) {
+          const maskThumbContainer = this.shadowRoot.getElementById(`mask-thumb-${layer.id}`);
+          if (maskThumbContainer) {
+            maskThumbContainer.innerHTML = '';
+            const maskCanvas = document.createElement('canvas');
+            maskCanvas.width = 32;
+            maskCanvas.height = 32;
+            const maskCtx = maskCanvas.getContext('2d');
+            maskCtx.drawImage(layer.mask.thumbnail, 0, 0);
+            maskThumbContainer.appendChild(maskCanvas);
+          }
+        }
       });
     });
+  }
+
+  handleMaskAction(action, layerId, event) {
+    const maskManager = getMaskManager();
+
+    switch (action) {
+      case 'edit-mask':
+        if (event.shiftKey) {
+          // Shift+click toggles mask enabled
+          maskManager.toggleMaskEnabled(layerId);
+        } else {
+          // Regular click enters mask editing mode
+          if (maskManager.isEditing() && maskManager.getEditingLayerId() === layerId) {
+            maskManager.exitMaskEditMode();
+          } else {
+            maskManager.enterMaskEditMode(layerId);
+          }
+        }
+        this.render();
+        break;
+      case 'toggle-mask-link':
+        maskManager.toggleMaskLinked(layerId);
+        this.render();
+        break;
+    }
   }
 }
 

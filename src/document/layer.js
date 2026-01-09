@@ -3,6 +3,8 @@
  * Supports raster layers, adjustment layers, and groups
  */
 
+import { LayerMask } from './mask.js';
+
 let layerIdCounter = 0;
 
 export const LayerType = {
@@ -166,15 +168,11 @@ export class Layer {
    * Create a mask for this layer
    */
   createMask(fillWhite = true) {
-    this.mask = new OffscreenCanvas(this.width, this.height);
-    const ctx = this.mask.getContext('2d');
-
-    if (fillWhite) {
-      ctx.fillStyle = 'white';
-      ctx.fillRect(0, 0, this.width, this.height);
-    }
-
+    this.mask = new LayerMask(this.width, this.height, {
+      fillBlack: !fillWhite
+    });
     this.maskEnabled = true;
+    this.maskLinked = true;
     this.dirty = true;
   }
 
@@ -183,6 +181,7 @@ export class Layer {
    */
   removeMask() {
     this.mask = null;
+    this.maskEnabled = false;
     this.dirty = true;
   }
 
@@ -192,20 +191,31 @@ export class Layer {
   applyMask() {
     if (!this.mask || !this.ctx) return;
 
-    const maskCtx = this.mask.getContext('2d');
-    const maskData = maskCtx.getImageData(0, 0, this.width, this.height);
+    // Use LayerMask's apply method
     const layerData = this.ctx.getImageData(0, 0, this.width, this.height);
+    const maskedData = this.mask.apply(layerData);
 
-    for (let i = 0; i < layerData.data.length; i += 4) {
-      // Use mask luminance to affect alpha
-      const maskAlpha = maskData.data[i]; // Red channel as grayscale
-      layerData.data[i + 3] = Math.round(layerData.data[i + 3] * (maskAlpha / 255));
-    }
-
-    this.ctx.putImageData(layerData, 0, 0);
+    this.ctx.putImageData(maskedData, 0, 0);
     this.mask = null;
+    this.maskEnabled = false;
     this.dirty = true;
     this.updateThumbnail();
+  }
+
+  /**
+   * Get the rendered layer with mask applied (non-destructive)
+   */
+  getRenderedImageData() {
+    if (!this.ctx) return null;
+
+    const layerData = this.ctx.getImageData(0, 0, this.width, this.height);
+
+    // Apply mask if enabled
+    if (this.mask && this.maskEnabled) {
+      return this.mask.apply(layerData);
+    }
+
+    return layerData;
   }
 
   /**
@@ -265,9 +275,9 @@ export class Layer {
     }
 
     if (this.mask) {
-      cloned.createMask(false);
-      const maskCtx = cloned.mask.getContext('2d');
-      maskCtx.drawImage(this.mask, 0, 0);
+      cloned.mask = this.mask.clone();
+      cloned.maskEnabled = this.maskEnabled;
+      cloned.maskLinked = this.maskLinked;
     }
 
     return cloned;
