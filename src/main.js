@@ -40,6 +40,14 @@ import './components/panels/history-panel.js';
 import './components/panels/brushes-panel.js';
 import './components/panels/adjustments-panel.js';
 
+// Dialogs
+import './components/dialogs/export-dialog.js';
+import { showExportDialog } from './components/dialogs/export-dialog.js';
+
+// File I/O
+import { importImageAsDocument, importImageAsLayer } from './io/image-import.js';
+import { importPSD } from './io/psd/psd-import.js';
+
 /**
  * Main Photo Editor Application
  */
@@ -296,22 +304,28 @@ class PhotoEditorApp {
               accept: {
                 'image/*': ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']
               }
+            },
+            {
+              description: 'Photoshop Files',
+              accept: {
+                'image/vnd.adobe.photoshop': ['.psd']
+              }
             }
           ]
         });
 
         const file = await handle.getFile();
-        await this.loadImageFile(file);
+        await this.loadFile(file);
       } else {
         // Fallback to input element
         const input = document.createElement('input');
         input.type = 'file';
-        input.accept = 'image/*';
+        input.accept = 'image/*,.psd';
 
         input.onchange = async (e) => {
           const file = e.target.files[0];
           if (file) {
-            await this.loadImageFile(file);
+            await this.loadFile(file);
           }
         };
 
@@ -321,6 +335,42 @@ class PhotoEditorApp {
       if (error.name !== 'AbortError') {
         console.error('Error opening file:', error);
       }
+    }
+  }
+
+  /**
+   * Load a file (image or PSD)
+   */
+  async loadFile(file) {
+    const extension = file.name.split('.').pop().toLowerCase();
+
+    if (extension === 'psd') {
+      await this.loadPSDFile(file);
+    } else {
+      await this.loadImageFile(file);
+    }
+  }
+
+  /**
+   * Load a PSD file
+   */
+  async loadPSDFile(file) {
+    try {
+      this.eventBus.emit(Events.FILE_IMPORT_START, { format: 'psd' });
+
+      this.document = await importPSD(file);
+      this.document.syncToStore();
+      this.history.clear();
+
+      this.eventBus.emit(Events.FILE_IMPORT_COMPLETE, { format: 'psd' });
+      this.eventBus.emit(Events.DOCUMENT_OPENED, { document: this.document });
+      this.eventBus.emit(Events.RENDER_REQUEST);
+
+      return this.document;
+    } catch (error) {
+      console.error('Error loading PSD:', error);
+      this.eventBus.emit(Events.FILE_IMPORT_ERROR, { error, format: 'psd' });
+      throw error;
     }
   }
 
@@ -362,8 +412,10 @@ class PhotoEditorApp {
     if (files.length === 0) return;
 
     const file = files[0];
-    if (file.type.startsWith('image/')) {
-      await this.loadImageFile(file);
+    const extension = file.name.split('.').pop().toLowerCase();
+
+    if (extension === 'psd' || file.type.startsWith('image/')) {
+      await this.loadFile(file);
     }
   }
 
@@ -371,14 +423,22 @@ class PhotoEditorApp {
    * Save the document
    */
   async save() {
-    // For now, just export as PNG
-    await this.export();
+    // Quick export as PNG
+    await this.quickExport();
   }
 
   /**
-   * Export the document
+   * Export the document - shows the export dialog
    */
-  async export(format = 'image/png') {
+  async export() {
+    if (!this.document) return;
+    showExportDialog(this.document);
+  }
+
+  /**
+   * Quick export as PNG (for Ctrl+S)
+   */
+  async quickExport(format = 'image/png') {
     if (!this.document) return;
 
     try {

@@ -209,6 +209,7 @@ export const Events = {
   FILE_IMPORT_ERROR: 'file:import:error',
   FILE_EXPORT_START: 'file:export:start',
   FILE_EXPORT_COMPLETE: 'file:export:complete',
+  FILE_EXPORT_ERROR: 'file:export:error',
 
   // Canvas events
   CANVAS_POINTER_DOWN: 'canvas:pointer:down',
