@@ -42,11 +42,18 @@ import './components/panels/adjustments-panel.js';
 
 // Dialogs
 import './components/dialogs/export-dialog.js';
+import './components/dialogs/recent-documents-dialog.js';
 import { showExportDialog } from './components/dialogs/export-dialog.js';
+import { showRecentDocumentsDialog } from './components/dialogs/recent-documents-dialog.js';
 
 // File I/O
 import { importImageAsDocument, importImageAsLayer } from './io/image-import.js';
 import { importPSD } from './io/psd/psd-import.js';
+
+// Storage
+import { openDatabase, requestPersistentStorage } from './storage/db.js';
+import { saveProject, loadProject } from './storage/project-store.js';
+import { initAutosave, setAutosaveDocument, checkForRecovery, forceAutosave } from './storage/autosave.js';
 
 /**
  * Main Photo Editor Application
@@ -74,6 +81,14 @@ class PhotoEditorApp {
     // Initialize event bus
     this.eventBus = getEventBus();
 
+    // Initialize database
+    try {
+      await openDatabase();
+      console.log('IndexedDB initialized');
+    } catch (error) {
+      console.warn('Failed to initialize IndexedDB:', error);
+    }
+
     // Initialize history
     this.history = getHistory();
     this.history.init();
@@ -91,13 +106,20 @@ class PhotoEditorApp {
     // Set up event handlers
     this.setupEventHandlers();
 
-    // Create default document
-    this.newDocument({
-      width: 1920,
-      height: 1080,
-      name: 'Untitled',
-      backgroundColor: '#ffffff'
-    });
+    // Check for recovery or create default document
+    const recoveryData = await checkForRecovery();
+    if (recoveryData) {
+      // Show recovery dialog
+      showRecentDocumentsDialog();
+    } else {
+      // Create default document
+      this.newDocument({
+        width: 1920,
+        height: 1080,
+        name: 'Untitled',
+        backgroundColor: '#ffffff'
+      });
+    }
 
     // Set default tool
     this.setTool('brush');
@@ -247,6 +269,11 @@ class PhotoEditorApp {
     this.eventBus.on('toolbar:undo', () => this.undo());
     this.eventBus.on('toolbar:redo', () => this.redo());
 
+    // Project handlers
+    this.eventBus.on('project:load', (data) => this.loadProjectData(data));
+    this.eventBus.on('project:recover', (data) => this.recoverProject(data));
+    this.eventBus.on('project:save', () => this.saveProjectToStorage());
+
     // Handle file drops
     document.addEventListener('dragover', (e) => {
       e.preventDefault();
@@ -278,6 +305,9 @@ class PhotoEditorApp {
 
     // Clear history
     this.history.clear();
+
+    // Initialize autosave for this document
+    initAutosave(this.document);
 
     this.eventBus.emit(Events.DOCUMENT_CREATED, { document: this.document });
 
@@ -624,6 +654,201 @@ class PhotoEditorApp {
 
   startTransform() {
     // TODO: Implement transform tool
+  }
+
+  // ========== Project Storage Operations ==========
+
+  /**
+   * Save project to IndexedDB
+   */
+  async saveProjectToStorage() {
+    if (!this.document) return;
+
+    try {
+      const projectId = await saveProject(this.document);
+      this.document.id = projectId;
+      console.log('Project saved:', projectId);
+      this.eventBus.emit(Events.DOCUMENT_SAVED, { document: this.document });
+    } catch (error) {
+      console.error('Failed to save project:', error);
+    }
+  }
+
+  /**
+   * Load project from stored data
+   */
+  async loadProjectData(data) {
+    try {
+      // Create document from project data
+      this.document = createDocument({
+        id: data.project.id,
+        width: data.project.width,
+        height: data.project.height,
+        name: data.project.name,
+        backgroundColor: data.project.background?.color || '#ffffff',
+        transparentBackground: data.project.background?.transparent || false
+      });
+
+      // Restore layers
+      await this.restoreLayersFromData(data.layers);
+
+      // Sync to store
+      this.document.syncToStore();
+
+      // Clear history
+      this.history.clear();
+
+      // Initialize autosave
+      initAutosave(this.document);
+
+      this.eventBus.emit(Events.DOCUMENT_OPENED, { document: this.document });
+      this.eventBus.emit(Events.RENDER_REQUEST);
+    } catch (error) {
+      console.error('Failed to load project:', error);
+    }
+  }
+
+  /**
+   * Recover project from autosave data
+   */
+  async recoverProject(data) {
+    try {
+      // Create document from recovery data
+      this.document = createDocument({
+        id: data.id,
+        width: data.width,
+        height: data.height,
+        name: data.name,
+        backgroundColor: '#ffffff'
+      });
+
+      // Restore layers
+      await this.restoreLayersFromData(data.layers);
+
+      // Sync to store
+      this.document.syncToStore();
+
+      // Clear history
+      this.history.clear();
+
+      // Initialize autosave
+      initAutosave(this.document);
+
+      this.eventBus.emit(Events.DOCUMENT_OPENED, { document: this.document });
+      this.eventBus.emit(Events.RENDER_REQUEST);
+
+      console.log('Document recovered successfully');
+    } catch (error) {
+      console.error('Failed to recover project:', error);
+    }
+  }
+
+  /**
+   * Restore layers from stored data
+   */
+  async restoreLayersFromData(layersData) {
+    // Clear existing layers
+    this.document.layers = [];
+
+    // Group layers by parent
+    const rootLayers = layersData.filter(l => !l.parentId);
+    const childMap = new Map();
+
+    for (const layer of layersData) {
+      if (layer.parentId) {
+        if (!childMap.has(layer.parentId)) {
+          childMap.set(layer.parentId, []);
+        }
+        childMap.get(layer.parentId).push(layer);
+      }
+    }
+
+    // Create layers
+    for (const layerData of rootLayers) {
+      const layer = await this.createLayerFromData(layerData);
+      if (layer) {
+        // Add children if group
+        if (layer.type === 'group' && childMap.has(layerData.id)) {
+          for (const childData of childMap.get(layerData.id)) {
+            const child = await this.createLayerFromData(childData);
+            if (child) {
+              layer.addChild(child);
+            }
+          }
+        }
+        this.document.layers.push(layer);
+      }
+    }
+
+    // Set active layer
+    if (this.document.layers.length > 0) {
+      this.document.setActiveLayer(this.document.layers[0].id);
+    }
+  }
+
+  /**
+   * Create a layer from stored data
+   */
+  async createLayerFromData(data) {
+    const { createRasterLayer, createAdjustmentLayer, createLayerGroup, LayerType } = await import('./document/layer.js');
+
+    let layer;
+
+    switch (data.type) {
+      case LayerType.RASTER:
+      case 'raster':
+        layer = createRasterLayer(data.name, data.width, data.height);
+        // Restore image data
+        if (data.imageData) {
+          layer.ctx.putImageData(data.imageData, 0, 0);
+        }
+        break;
+
+      case LayerType.ADJUSTMENT:
+      case 'adjustment':
+        layer = createAdjustmentLayer(data.adjustment?.type || 'brightness-contrast', data.name);
+        if (data.adjustment) {
+          layer.adjustment = { ...data.adjustment };
+        }
+        break;
+
+      case LayerType.GROUP:
+      case 'group':
+        layer = createLayerGroup(data.name);
+        layer.expanded = data.expanded !== false;
+        break;
+
+      default:
+        console.warn('Unknown layer type:', data.type);
+        return null;
+    }
+
+    // Restore common properties
+    layer.id = data.id;
+    layer.visible = data.visible !== false;
+    layer.opacity = data.opacity ?? 1;
+    layer.blendMode = data.blendMode || 'normal';
+    layer.x = data.x || 0;
+    layer.y = data.y || 0;
+    layer.locked = data.locked || false;
+    layer.clipped = data.clipped || false;
+
+    // Restore mask
+    if (data.maskData) {
+      layer.mask = new OffscreenCanvas(data.width, data.height);
+      const maskCtx = layer.mask.getContext('2d');
+      maskCtx.putImageData(data.maskData, 0, 0);
+      layer.maskEnabled = data.maskEnabled !== false;
+    }
+
+    return layer;
+  }
+
+  /**
+   * Show recent documents dialog
+   */
+  showRecentDocuments() {
+    showRecentDocumentsDialog();
   }
 }
 
