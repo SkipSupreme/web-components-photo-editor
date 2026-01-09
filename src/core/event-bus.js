@@ -172,6 +172,7 @@ export const Events = {
   // Selection events
   SELECTION_CHANGED: 'selection:changed',
   SELECTION_CLEARED: 'selection:cleared',
+  SELECTION_INVERTED: 'selection:inverted',
   SELECTION_PREVIEW_START: 'selection:preview:start',
   SELECTION_PREVIEW_UPDATE: 'selection:preview:update',
   SELECTION_PREVIEW_END: 'selection:preview:end',

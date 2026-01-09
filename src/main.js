@@ -10,8 +10,8 @@ import { getHistory } from './core/commands.js';
 import { getShortcuts, ShortcutContext } from './core/shortcuts.js';
 
 // Document
-import { Document, createDocument, createDocumentFromImage } from './document/document.js';
-import { createRasterLayer, createLayerFromImage } from './document/layer.js';
+import { createDocument, createDocumentFromImage } from './document/document.js';
+import { createRasterLayer } from './document/layer.js';
 
 // Tools
 import { getToolManager } from './tools/tool-manager.js';
@@ -26,9 +26,6 @@ import { MagicWandTool } from './tools/selection/magic-wand-tool.js';
 import { TransformTool } from './tools/transform-tool.js';
 import { GradientTool } from './tools/gradient-tool.js';
 import { CropTool } from './tools/crop-tool.js';
-
-// Document
-import { Selection } from './document/selection.js';
 
 // Components
 import './components/app-shell.js';
@@ -45,23 +42,25 @@ import './components/dialogs/export-dialog.js';
 import './components/dialogs/recent-documents-dialog.js';
 import './components/dialogs/shortcuts-dialog.js';
 import './components/dialogs/settings-dialog.js';
+import './components/dialogs/new-document-dialog.js';
 import { showExportDialog } from './components/dialogs/export-dialog.js';
 import { showRecentDocumentsDialog } from './components/dialogs/recent-documents-dialog.js';
 import { showShortcutsDialog } from './components/dialogs/shortcuts-dialog.js';
 import { showSettingsDialog } from './components/dialogs/settings-dialog.js';
+import { showNewDocumentDialog as openNewDocumentDialog } from './components/dialogs/new-document-dialog.js';
 
 // Shared components
 import './components/shared/loading-indicator.js';
 import { getLoadingIndicator } from './components/shared/loading-indicator.js';
 
 // File I/O
-import { importImageAsDocument, importImageAsLayer } from './io/image-import.js';
+import { importImageAsDocument } from './io/image-import.js';
 import { importPSD } from './io/psd/psd-import.js';
 
 // Storage
-import { openDatabase, requestPersistentStorage } from './storage/db.js';
+import { openDatabase } from './storage/db.js';
 import { saveProject, loadProject } from './storage/project-store.js';
-import { initAutosave, setAutosaveDocument, checkForRecovery, forceAutosave } from './storage/autosave.js';
+import { initAutosave, checkForRecovery } from './storage/autosave.js';
 
 // Theme and accessibility
 import { initThemeManager } from './core/theme-manager.js';
@@ -295,6 +294,9 @@ class PhotoEditorApp {
     this.eventBus.on('project:recover', (data) => this.recoverProject(data));
     this.eventBus.on('project:save', () => this.saveProjectToStorage());
 
+    // New document dialog
+    this.eventBus.on('new-document:create', (options) => this.newDocument(options));
+
     // Handle file drops
     document.addEventListener('dragover', (e) => {
       e.preventDefault();
@@ -336,9 +338,7 @@ class PhotoEditorApp {
   }
 
   showNewDocumentDialog() {
-    // For now, just create a default document
-    // TODO: Show actual dialog
-    this.newDocument();
+    openNewDocumentDialog();
   }
 
   /**
@@ -482,6 +482,14 @@ class PhotoEditorApp {
    * Export the document - shows the export dialog
    */
   async export() {
+    if (!this.document) return;
+    showExportDialog(this.document);
+  }
+
+  /**
+   * Save As - show export dialog for Save As functionality
+   */
+  async saveAs() {
     if (!this.document) return;
     showExportDialog(this.document);
   }
@@ -646,6 +654,10 @@ class PhotoEditorApp {
     this.eventBus.emit('toolbar:zoom-out');
   }
 
+  actualSize() {
+    this.eventBus.emit('toolbar:actual-size');
+  }
+
   fitToScreen() {
     this.eventBus.emit('toolbar:fit');
   }
@@ -653,7 +665,19 @@ class PhotoEditorApp {
   // ========== Selection Operations ==========
 
   selectAll() {
-    // TODO: Implement selection
+    if (!this.document) return;
+
+    // Create a selection covering the entire document
+    const selection = {
+      type: 'rectangle',
+      x: 0,
+      y: 0,
+      width: this.document.width,
+      height: this.document.height
+    };
+
+    this.store.state.document.selection = selection;
+    this.eventBus.emit(Events.SELECTION_CHANGED, { selection });
   }
 
   deselect() {
@@ -662,11 +686,48 @@ class PhotoEditorApp {
   }
 
   invertSelection() {
-    // TODO: Implement
+    if (!this.document) return;
+
+    const currentSelection = this.store.state.document.selection;
+    if (!currentSelection) {
+      // No selection to invert - select all
+      this.selectAll();
+      return;
+    }
+
+    // Emit invert event - canvas overlay will handle the masking
+    this.eventBus.emit(Events.SELECTION_INVERTED, { selection: currentSelection });
   }
 
   deleteSelected() {
-    // TODO: Delete selection or active layer content
+    if (!this.document) return;
+
+    const selection = this.store.state.document.selection;
+    const activeLayer = this.document.getActiveLayer();
+
+    if (!activeLayer || activeLayer.type !== 'raster') return;
+
+    if (selection) {
+      // Clear the selected area on the active layer
+      const ctx = activeLayer.ctx;
+      ctx.save();
+      ctx.globalCompositeOperation = 'destination-out';
+
+      if (selection.type === 'rectangle') {
+        ctx.fillRect(selection.x, selection.y, selection.width, selection.height);
+      } else if (selection.path) {
+        // For complex selections (lasso, magic wand)
+        ctx.fill(selection.path);
+      }
+
+      ctx.restore();
+    } else {
+      // No selection - clear entire layer
+      activeLayer.ctx.clearRect(0, 0, activeLayer.width, activeLayer.height);
+    }
+
+    this.eventBus.emit(Events.LAYER_UPDATED, { layer: activeLayer });
+    this.eventBus.emit(Events.RENDER_REQUEST);
   }
 
   cancelOperation() {
@@ -674,7 +735,15 @@ class PhotoEditorApp {
   }
 
   startTransform() {
-    // TODO: Implement transform tool
+    if (!this.document) return;
+
+    // Switch to transform tool
+    this.setTool('transform');
+
+    // Emit event to initialize transform on active layer
+    this.eventBus.emit(Events.TRANSFORM_START, {
+      layerId: this.document.activeLayerId
+    });
   }
 
   // ========== Project Storage Operations ==========
