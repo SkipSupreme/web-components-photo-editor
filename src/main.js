@@ -43,8 +43,16 @@ import './components/panels/adjustments-panel.js';
 // Dialogs
 import './components/dialogs/export-dialog.js';
 import './components/dialogs/recent-documents-dialog.js';
+import './components/dialogs/shortcuts-dialog.js';
+import './components/dialogs/settings-dialog.js';
 import { showExportDialog } from './components/dialogs/export-dialog.js';
 import { showRecentDocumentsDialog } from './components/dialogs/recent-documents-dialog.js';
+import { showShortcutsDialog } from './components/dialogs/shortcuts-dialog.js';
+import { showSettingsDialog } from './components/dialogs/settings-dialog.js';
+
+// Shared components
+import './components/shared/loading-indicator.js';
+import { getLoadingIndicator } from './components/shared/loading-indicator.js';
 
 // File I/O
 import { importImageAsDocument, importImageAsLayer } from './io/image-import.js';
@@ -54,6 +62,10 @@ import { importPSD } from './io/psd/psd-import.js';
 import { openDatabase, requestPersistentStorage } from './storage/db.js';
 import { saveProject, loadProject } from './storage/project-store.js';
 import { initAutosave, setAutosaveDocument, checkForRecovery, forceAutosave } from './storage/autosave.js';
+
+// Theme and accessibility
+import { initThemeManager } from './core/theme-manager.js';
+import { initAccessibility } from './core/accessibility.js';
 
 /**
  * Main Photo Editor Application
@@ -88,6 +100,15 @@ class PhotoEditorApp {
     } catch (error) {
       console.warn('Failed to initialize IndexedDB:', error);
     }
+
+    // Initialize theme
+    await initThemeManager();
+
+    // Initialize accessibility
+    initAccessibility();
+
+    // Initialize loading indicator
+    getLoadingIndicator();
 
     // Initialize history
     this.history = getHistory();
