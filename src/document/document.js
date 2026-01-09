@@ -294,27 +294,140 @@ export class Document {
   }
 
   /**
-   * Get flattened image as blob
+   * Get composited canvas with proper clipping and mask support
+   * @param {boolean} includeBackground - Include background fill
+   * @returns {OffscreenCanvas} Composited canvas
    */
-  async toBlob(format = 'image/png', quality = 0.92) {
+  getCompositedCanvas(includeBackground = true) {
     const canvas = new OffscreenCanvas(this.width, this.height);
     const ctx = canvas.getContext('2d');
 
     // Fill background if not transparent
-    if (!this.background.transparent && format !== 'image/png') {
+    if (includeBackground && !this.background.transparent) {
       ctx.fillStyle = this.background.color;
       ctx.fillRect(0, 0, this.width, this.height);
     }
 
-    // Composite all visible layers
-    for (const layer of this.layers) {
-      if (!layer.visible || !layer.canvas) continue;
+    // Group layers by clipping relationship
+    // Process layers from bottom to top
+    let i = 0;
+    while (i < this.layers.length) {
+      const layer = this.layers[i];
 
-      ctx.globalAlpha = layer.opacity;
-      ctx.globalCompositeOperation = layer.blendMode;
-      ctx.drawImage(layer.canvas, layer.x, layer.y);
+      if (!layer.visible) {
+        i++;
+        continue;
+      }
+
+      // Find clipping group (consecutive clipped layers above this one)
+      const clippingGroup = [layer];
+      let j = i + 1;
+      while (j < this.layers.length && this.layers[j].clipped) {
+        if (this.layers[j].visible) {
+          clippingGroup.push(this.layers[j]);
+        }
+        j++;
+      }
+
+      if (clippingGroup.length === 1) {
+        // Single layer, no clipping - render normally
+        this.renderLayerToContext(ctx, layer);
+      } else {
+        // Render clipping group
+        this.renderClippingGroup(ctx, clippingGroup);
+      }
+
+      i = j;
     }
 
+    return canvas;
+  }
+
+  /**
+   * Render a single layer to context, handling masks
+   */
+  renderLayerToContext(ctx, layer) {
+    if (!layer.canvas) return;
+
+    ctx.save();
+
+    // Get layer content, potentially with mask applied
+    let sourceCanvas = layer.canvas;
+
+    if (layer.mask && layer.maskEnabled) {
+      // Create temporary canvas with mask applied
+      const maskedCanvas = new OffscreenCanvas(layer.width, layer.height);
+      const maskedCtx = maskedCanvas.getContext('2d');
+
+      // Draw layer content
+      maskedCtx.drawImage(layer.canvas, 0, 0);
+
+      // Apply mask using destination-in
+      maskedCtx.globalCompositeOperation = 'destination-in';
+      maskedCtx.drawImage(layer.mask.canvas, 0, 0);
+
+      sourceCanvas = maskedCanvas;
+    }
+
+    ctx.globalAlpha = layer.opacity;
+    ctx.globalCompositeOperation = layer.blendMode;
+    ctx.drawImage(sourceCanvas, layer.x, layer.y);
+
+    ctx.restore();
+  }
+
+  /**
+   * Render a clipping group (base layer + clipped layers)
+   */
+  renderClippingGroup(ctx, group) {
+    if (group.length === 0) return;
+
+    const baseLayer = group[0];
+    if (!baseLayer.canvas) return;
+
+    // Create temporary canvas for the clipping group
+    const groupCanvas = new OffscreenCanvas(this.width, this.height);
+    const groupCtx = groupCanvas.getContext('2d');
+
+    // Render base layer first (with its mask if any)
+    this.renderLayerToContext(groupCtx, baseLayer);
+
+    // Render clipped layers using source-atop to clip to base layer's alpha
+    for (let i = 1; i < group.length; i++) {
+      const clippedLayer = group[i];
+      if (!clippedLayer.canvas) continue;
+
+      let sourceCanvas = clippedLayer.canvas;
+
+      // Apply mask if present
+      if (clippedLayer.mask && clippedLayer.maskEnabled) {
+        const maskedCanvas = new OffscreenCanvas(clippedLayer.width, clippedLayer.height);
+        const maskedCtx = maskedCanvas.getContext('2d');
+        maskedCtx.drawImage(clippedLayer.canvas, 0, 0);
+        maskedCtx.globalCompositeOperation = 'destination-in';
+        maskedCtx.drawImage(clippedLayer.mask.canvas, 0, 0);
+        sourceCanvas = maskedCanvas;
+      }
+
+      groupCtx.save();
+      groupCtx.globalAlpha = clippedLayer.opacity;
+
+      // Use source-atop to clip to existing content
+      groupCtx.globalCompositeOperation = 'source-atop';
+      groupCtx.drawImage(sourceCanvas, clippedLayer.x, clippedLayer.y);
+
+      groupCtx.restore();
+    }
+
+    // Draw the composited group to main canvas
+    ctx.drawImage(groupCanvas, 0, 0);
+  }
+
+  /**
+   * Get flattened image as blob
+   */
+  async toBlob(format = 'image/png', quality = 0.92) {
+    const canvas = this.getCompositedCanvas(format !== 'image/png');
     return await canvas.convertToBlob({ type: format, quality });
   }
 

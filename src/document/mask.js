@@ -477,6 +477,48 @@ export class InvertMaskCommand extends Command {
 }
 
 /**
+ * Command for toggling clipping mask
+ */
+export class ToggleClippingCommand extends Command {
+  constructor(layerId) {
+    super('Toggle Clipping');
+    this.layerId = layerId;
+    this.previousState = null;
+  }
+
+  execute() {
+    const app = window.photoEditorApp;
+    if (!app || !app.document) return false;
+
+    const layer = app.document.getLayer(this.layerId);
+    if (!layer) return false;
+
+    this.previousState = layer.clipped;
+    layer.clipped = !layer.clipped;
+    layer.dirty = true;
+
+    getEventBus().emit(Events.LAYER_UPDATED, { layer });
+    getEventBus().emit(Events.RENDER_REQUEST);
+    return true;
+  }
+
+  undo() {
+    const app = window.photoEditorApp;
+    if (!app || !app.document) return false;
+
+    const layer = app.document.getLayer(this.layerId);
+    if (!layer) return false;
+
+    layer.clipped = this.previousState;
+    layer.dirty = true;
+
+    getEventBus().emit(Events.LAYER_UPDATED, { layer });
+    getEventBus().emit(Events.RENDER_REQUEST);
+    return true;
+  }
+}
+
+/**
  * Mask manager for handling mask editing state
  */
 class MaskManager {
@@ -586,6 +628,14 @@ class MaskManager {
     layer.maskLinked = layer.mask.linked;
 
     this.eventBus?.emit(Events.LAYER_UPDATED, { layer });
+  }
+
+  /**
+   * Toggle clipping mask
+   */
+  toggleClipping(layerId) {
+    const command = new ToggleClippingCommand(layerId);
+    getHistory().execute(command);
   }
 }
 

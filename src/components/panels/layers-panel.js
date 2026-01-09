@@ -304,6 +304,32 @@ template.innerHTML = `
       height: 12px;
       fill: currentColor;
     }
+
+    /* Clipping mask styles */
+    .layer-item.clipped {
+      margin-left: 16px;
+      border-left: 2px solid var(--accent-color);
+    }
+
+    .layer-item.clipped::before {
+      content: '';
+      position: absolute;
+      left: -16px;
+      top: 50%;
+      width: 14px;
+      height: 2px;
+      background: var(--accent-color);
+    }
+
+    .clip-indicator {
+      font-size: 10px;
+      color: var(--accent-color);
+      margin-left: 4px;
+    }
+
+    .layer-item {
+      position: relative;
+    }
   </style>
 
   <div class="panel-header">
@@ -425,7 +451,13 @@ export class LayersPanel extends HTMLElement {
       }
 
       if (layerItem) {
-        this.selectLayer(layerItem.dataset.id);
+        if (event.altKey) {
+          // Alt+click toggles clipping mask
+          const maskManager = getMaskManager();
+          maskManager.toggleClipping(layerItem.dataset.id);
+        } else {
+          this.selectLayer(layerItem.dataset.id);
+        }
       }
     });
 
@@ -650,12 +682,15 @@ export class LayersPanel extends HTMLElement {
     const maskManager = getMaskManager();
     const editingMaskLayerId = maskManager.getEditingLayerId();
 
-    layersList.innerHTML = layers.map(layer => {
+    layersList.innerHTML = layers.map((layer, index) => {
       const hasMask = !!layer.mask;
       const isEditingMask = editingMaskLayerId === layer.id;
+      const isClipped = layer.clipped;
+      // Check if this is the bottom layer (can't clip to nothing)
+      const isBottomLayer = index === layers.length - 1;
 
       return `
-      <div class="layer-item ${layer.id === activeId ? 'selected' : ''}"
+      <div class="layer-item ${layer.id === activeId ? 'selected' : ''} ${isClipped ? 'clipped' : ''}"
            data-id="${layer.id}">
         <button class="layer-visibility ${layer.visible ? '' : 'hidden'}" title="Toggle Visibility">
           <svg viewBox="0 0 24 24">
@@ -683,8 +718,8 @@ export class LayersPanel extends HTMLElement {
           ` : ''}
         </div>
         <div class="layer-info">
-          <div class="layer-name">${layer.name}</div>
-          <div class="layer-meta">${layer.blendMode}${layer.opacity < 1 ? `, ${Math.round(layer.opacity * 100)}%` : ''}${hasMask ? ' • Mask' : ''}</div>
+          <div class="layer-name">${layer.name}${isClipped ? '<span class="clip-indicator">⤷</span>' : ''}</div>
+          <div class="layer-meta">${layer.blendMode}${layer.opacity < 1 ? `, ${Math.round(layer.opacity * 100)}%` : ''}${hasMask ? ' • Mask' : ''}${isClipped ? ' • Clipped' : ''}</div>
         </div>
       </div>
     `}).join('');

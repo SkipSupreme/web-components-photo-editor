@@ -1,9 +1,10 @@
 /**
- * Canvas Overlay - Renders selection marching ants, guides, rulers, and tool previews
+ * Canvas Overlay - Renders selection marching ants, guides, rulers, tool previews, and mask editing visualization
  */
 
 import { getStore } from '../../core/store.js';
 import { getEventBus, Events } from '../../core/event-bus.js';
+import { getMaskManager } from '../../document/mask.js';
 
 const template = document.createElement('template');
 template.innerHTML = `
@@ -57,6 +58,12 @@ export class CanvasOverlay extends HTMLElement {
     // Transform handles state
     this.transformHandles = null;
 
+    // Mask editing state
+    this.maskManager = null;
+    this.isEditingMask = false;
+    this.editingMaskLayerId = null;
+    this.showMaskOverlay = true; // Show red overlay on masked areas
+
     // Bound methods
     this.handleResize = this.handleResize.bind(this);
     this.animate = this.animate.bind(this);
@@ -65,6 +72,7 @@ export class CanvasOverlay extends HTMLElement {
   connectedCallback() {
     this.store = getStore();
     this.eventBus = getEventBus();
+    this.maskManager = getMaskManager();
     this.canvas = this.shadowRoot.getElementById('overlay-canvas');
     this.ctx = this.canvas.getContext('2d');
 
@@ -130,6 +138,18 @@ export class CanvasOverlay extends HTMLElement {
         // Will be rendered on next animation frame
       })
     );
+
+    // Mask editing mode
+    this.unsubscribers.push(
+      this.eventBus.on('mask:edit-start', ({ layerId }) => {
+        this.isEditingMask = true;
+        this.editingMaskLayerId = layerId;
+      }),
+      this.eventBus.on('mask:edit-end', () => {
+        this.isEditingMask = false;
+        this.editingMaskLayerId = null;
+      })
+    );
   }
 
   handleResize() {
@@ -167,6 +187,11 @@ export class CanvasOverlay extends HTMLElement {
     // Clear
     ctx.clearRect(0, 0, width / dpr, height / dpr);
 
+    // Draw mask overlay when editing
+    if (this.isEditingMask && this.showMaskOverlay) {
+      this.drawMaskOverlay(ctx);
+    }
+
     // Draw selection preview (while dragging)
     if (this.selectionPreview) {
       this.drawSelectionPreview(ctx);
@@ -181,6 +206,11 @@ export class CanvasOverlay extends HTMLElement {
     // Draw transform handles
     if (this.transformHandles) {
       this.drawTransformHandles(ctx);
+    }
+
+    // Draw mask editing indicator
+    if (this.isEditingMask) {
+      this.drawMaskEditingIndicator(ctx);
     }
   }
 
@@ -430,6 +460,93 @@ export class CanvasOverlay extends HTMLElement {
     ctx.stroke();
 
     ctx.restore();
+  }
+
+  /**
+   * Draw mask overlay to visualize masked areas
+   * Shows red tint on areas that will be hidden (black in mask)
+   */
+  drawMaskOverlay(ctx) {
+    const app = window.photoEditorApp;
+    if (!app || !app.document) return;
+
+    const layer = app.document.getLayer(this.editingMaskLayerId);
+    if (!layer || !layer.mask) return;
+
+    const { zoom, panX, panY } = this.viewport;
+    const mask = layer.mask;
+
+    // Get mask data
+    const maskData = mask.getImageData();
+    const { width, height, data } = maskData;
+
+    // Create a temporary canvas for the overlay
+    const tempCanvas = new OffscreenCanvas(width, height);
+    const tempCtx = tempCanvas.getContext('2d');
+    const overlayData = tempCtx.createImageData(width, height);
+
+    // Create red overlay where mask is black (hidden areas)
+    for (let i = 0; i < data.length; i += 4) {
+      const maskValue = data[i]; // Red channel (grayscale)
+      const hiddenAmount = 255 - maskValue; // Inverted - more hidden = more red
+
+      overlayData.data[i] = 255;     // Red
+      overlayData.data[i + 1] = 0;   // Green
+      overlayData.data[i + 2] = 0;   // Blue
+      overlayData.data[i + 3] = Math.round(hiddenAmount * 0.5); // Alpha (50% max)
+    }
+
+    tempCtx.putImageData(overlayData, 0, 0);
+
+    // Draw the overlay scaled to viewport
+    ctx.save();
+    ctx.globalCompositeOperation = 'source-over';
+
+    // Position and scale to match document
+    const docX = panX;
+    const docY = panY;
+    const docWidth = width * zoom;
+    const docHeight = height * zoom;
+
+    ctx.drawImage(tempCanvas, docX, docY, docWidth, docHeight);
+    ctx.restore();
+  }
+
+  /**
+   * Draw mask editing mode indicator (border around canvas)
+   */
+  drawMaskEditingIndicator(ctx) {
+    const dpr = window.devicePixelRatio || 1;
+    const width = this.canvas.width / dpr;
+    const height = this.canvas.height / dpr;
+
+    ctx.save();
+
+    // Draw pulsing border to indicate mask editing mode
+    const pulse = Math.sin(Date.now() / 300) * 0.3 + 0.7; // Pulse between 0.4 and 1.0
+    ctx.strokeStyle = `rgba(255, 100, 100, ${pulse})`;
+    ctx.lineWidth = 3;
+    ctx.setLineDash([10, 5]);
+    ctx.lineDashOffset = -this.marchingAntsOffset * 2;
+    ctx.strokeRect(2, 2, width - 4, height - 4);
+
+    // Draw "MASK" indicator in corner
+    ctx.fillStyle = 'rgba(255, 100, 100, 0.9)';
+    ctx.fillRect(10, 10, 60, 24);
+    ctx.fillStyle = '#ffffff';
+    ctx.font = 'bold 12px sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('MASK', 40, 22);
+
+    ctx.restore();
+  }
+
+  /**
+   * Toggle mask overlay visibility
+   */
+  toggleMaskOverlay() {
+    this.showMaskOverlay = !this.showMaskOverlay;
   }
 }
 

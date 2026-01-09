@@ -605,12 +605,64 @@ export class EditorCanvas extends HTMLElement {
     gl.useProgram(this.program);
     gl.bindVertexArray(this.vao);
 
-    // Render each visible layer
-    for (const layer of app.document.layers) {
-      if (!layer.visible || !layer.canvas) continue;
+    // Check if document has any clipping masks or layer masks that need compositing
+    const hasClippingOrMasks = app.document.layers.some(l =>
+      l.clipped || (l.mask && l.maskEnabled)
+    );
 
-      this.renderLayer(layer);
+    if (hasClippingOrMasks) {
+      // Use composited canvas for proper mask/clipping support
+      const compositedCanvas = app.document.getCompositedCanvas(false);
+      this.renderComposited(compositedCanvas);
+    } else {
+      // Fast path: render layers directly
+      for (const layer of app.document.layers) {
+        if (!layer.visible || !layer.canvas) continue;
+        this.renderLayer(layer);
+      }
     }
+  }
+
+  /**
+   * Render a pre-composited canvas (for documents with masks/clipping)
+   */
+  renderComposited(canvas) {
+    const gl = this.gl;
+
+    // Create or update texture for composited output
+    if (!this._compositedTexture) {
+      this._compositedTexture = gl.createTexture();
+    }
+
+    gl.bindTexture(gl.TEXTURE_2D, this._compositedTexture);
+    gl.texImage2D(
+      gl.TEXTURE_2D, 0, gl.RGBA,
+      gl.RGBA, gl.UNSIGNED_BYTE, canvas
+    );
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+    // Create a virtual layer for the composited output
+    const virtualLayer = {
+      x: 0,
+      y: 0,
+      width: canvas.width,
+      height: canvas.height,
+      opacity: 1
+    };
+
+    // Calculate transform matrix
+    const matrix = this.createTransformMatrix(virtualLayer);
+
+    // Set uniforms
+    gl.uniformMatrix3fv(this.locations.matrix, false, matrix);
+    gl.uniform1f(this.locations.opacity, 1);
+    gl.uniform1i(this.locations.texture, 0);
+
+    // Draw
+    gl.drawArrays(gl.TRIANGLES, 0, 6);
   }
 
   renderLayer(layer) {

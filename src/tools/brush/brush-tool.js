@@ -1,5 +1,6 @@
 /**
  * Brush Tool - Pressure-sensitive painting tool
+ * Supports painting on layers and masks
  */
 
 import { BaseTool } from '../base-tool.js';
@@ -9,6 +10,7 @@ import { getBrushTipManager } from './brush-tips.js';
 import { getStore } from '../../core/store.js';
 import { getEventBus, Events } from '../../core/event-bus.js';
 import { Command, executeCommand, getHistory } from '../../core/commands.js';
+import { getMaskManager, MaskPaintCommand } from '../../document/mask.js';
 
 /**
  * Command for brush strokes (for undo/redo)
@@ -91,6 +93,7 @@ export class BrushTool extends BaseTool {
     this.engine = new BrushEngine();
     this.presetManager = null;
     this.tipManager = null;
+    this.maskManager = null;
     this.store = null;
     this.eventBus = null;
 
@@ -103,6 +106,10 @@ export class BrushTool extends BaseTool {
     this.strokeLayerId = null;
     this.beforeImageData = null;
     this.strokeBounds = null;
+
+    // Mask editing state
+    this.isPaintingMask = false;
+    this.beforeMaskData = null;
 
     // Current brush settings (from preset + overrides)
     this.currentBrush = null;
@@ -117,6 +124,7 @@ export class BrushTool extends BaseTool {
     this.eventBus = getEventBus();
     this.presetManager = getBrushPresetManager();
     this.tipManager = getBrushTipManager();
+    this.maskManager = getMaskManager();
 
     // Load options from store
     this.options = { ...this.store.state.tools.options.brush };
@@ -175,8 +183,30 @@ export class BrushTool extends BaseTool {
     const app = window.photoEditorApp;
     if (!app || !app.document) return;
 
-    const layer = app.document.getActiveLayer();
-    if (!layer || !layer.ctx || layer.locked) return;
+    // Check if we're editing a mask
+    this.isPaintingMask = this.maskManager.isEditing();
+    const editingLayerId = this.maskManager.getEditingLayerId();
+
+    // Get the layer to work with
+    let layer;
+    if (this.isPaintingMask && editingLayerId) {
+      layer = app.document.getLayer(editingLayerId);
+      if (!layer || !layer.mask) {
+        this.isPaintingMask = false;
+        layer = app.document.getActiveLayer();
+      }
+    } else {
+      layer = app.document.getActiveLayer();
+    }
+
+    if (!layer || layer.locked) return;
+
+    // For mask painting, we need a mask; for layer painting, we need a ctx
+    if (this.isPaintingMask) {
+      if (!layer.mask) return;
+    } else {
+      if (!layer.ctx) return;
+    }
 
     this.isDrawing = true;
     this.strokePoints = [];
@@ -190,7 +220,13 @@ export class BrushTool extends BaseTool {
     this.engine.resetStroke();
 
     // Store before state for undo
-    this.beforeImageData = layer.ctx.getImageData(0, 0, layer.width, layer.height);
+    if (this.isPaintingMask) {
+      this.beforeMaskData = layer.mask.getImageData();
+      this.beforeImageData = null;
+    } else {
+      this.beforeImageData = layer.ctx.getImageData(0, 0, layer.width, layer.height);
+      this.beforeMaskData = null;
+    }
 
     // Initialize stroke bounds
     const brushSize = this.currentBrush.size;
@@ -253,47 +289,68 @@ export class BrushTool extends BaseTool {
     if (!app || !app.document) return;
 
     const layer = app.document.getLayer(this.strokeLayerId);
-    if (!layer || !layer.ctx) return;
+    if (!layer) return;
 
-    // Clamp bounds to layer size
+    // Clamp bounds to layer/mask size
+    const width = this.isPaintingMask ? layer.mask?.width : layer.width;
+    const height = this.isPaintingMask ? layer.mask?.height : layer.height;
+
+    if (!width || !height) return;
+
     this.strokeBounds.x = Math.max(0, this.strokeBounds.x);
     this.strokeBounds.y = Math.max(0, this.strokeBounds.y);
-    this.strokeBounds.width = Math.min(
-      layer.width - this.strokeBounds.x,
-      this.strokeBounds.width
-    );
-    this.strokeBounds.height = Math.min(
-      layer.height - this.strokeBounds.y,
-      this.strokeBounds.height
-    );
+    this.strokeBounds.width = Math.min(width - this.strokeBounds.x, this.strokeBounds.width);
+    this.strokeBounds.height = Math.min(height - this.strokeBounds.y, this.strokeBounds.height);
 
-    // Get after state for undo
-    const afterImageData = layer.ctx.getImageData(0, 0, layer.width, layer.height);
-
-    // Create and execute command (for undo support)
-    const command = new BrushStrokeCommand(
-      this.strokeLayerId,
-      this.beforeImageData,
-      afterImageData,
-      this.strokeBounds
-    );
-
-    // Note: we already drew, so just push to history without re-executing
     const history = getHistory();
-    history.undoStack.push(command);
-    history.redoStack = [];
+    let command;
 
-    this.eventBus.emit(Events.HISTORY_PUSH, { command });
-    this.eventBus.emit(Events.DOCUMENT_MODIFIED);
+    if (this.isPaintingMask && layer.mask) {
+      // Get after mask state for undo
+      const afterMaskData = layer.mask.getImageData();
 
-    // Update thumbnail
-    layer.updateThumbnail();
+      // Create mask paint command
+      command = new MaskPaintCommand(
+        this.strokeLayerId,
+        this.beforeMaskData,
+        afterMaskData
+      );
+
+      // Update mask thumbnail
+      layer.mask.updateThumbnail();
+    } else if (layer.ctx) {
+      // Get after layer state for undo
+      const afterImageData = layer.ctx.getImageData(0, 0, layer.width, layer.height);
+
+      // Create layer brush stroke command
+      command = new BrushStrokeCommand(
+        this.strokeLayerId,
+        this.beforeImageData,
+        afterImageData,
+        this.strokeBounds
+      );
+
+      // Update layer thumbnail
+      layer.updateThumbnail();
+    }
+
+    if (command) {
+      // Note: we already drew, so just push to history without re-executing
+      history.undoStack.push(command);
+      history.redoStack = [];
+
+      this.eventBus.emit(Events.HISTORY_PUSH, { command });
+      this.eventBus.emit(Events.DOCUMENT_MODIFIED);
+    }
+
     this.eventBus.emit(Events.LAYER_UPDATED, { layer });
 
     // Reset state
     this.strokePoints = [];
     this.lastPoint = null;
     this.beforeImageData = null;
+    this.beforeMaskData = null;
+    this.isPaintingMask = false;
   }
 
   /**
@@ -321,8 +378,26 @@ export class BrushTool extends BaseTool {
   }
 
   drawDab(layer, dab) {
-    const ctx = layer.ctx;
-    const color = this.store.state.colors.foreground;
+    // Determine which context to draw on
+    const ctx = this.isPaintingMask && layer.mask ? layer.mask.ctx : layer.ctx;
+    if (!ctx) return;
+
+    // For mask painting: foreground = white (reveal), background = black (hide)
+    // Use X key to swap colors for easy mask painting
+    let color;
+    if (this.isPaintingMask) {
+      // Get foreground color and check if it's closer to white or black
+      // For simplicity, use foreground=white (reveal) and background=black (hide)
+      const fg = this.store.state.colors.foreground;
+      const bg = this.store.state.colors.background;
+      // Use the foreground color brightness to determine mask value
+      const fgRgb = this.hexToRgb(fg);
+      const brightness = (fgRgb.r + fgRgb.g + fgRgb.b) / 3;
+      color = `rgb(${Math.round(brightness)}, ${Math.round(brightness)}, ${Math.round(brightness)})`;
+    } else {
+      color = this.store.state.colors.foreground;
+    }
+
     const hardness = this.currentBrush.hardness / 100;
     const tipShape = this.currentBrush.tipShape;
 
@@ -332,8 +407,8 @@ export class BrushTool extends BaseTool {
     const roundness = (dab.roundness || 100) / 100;
     const radius = size / 2;
 
-    // Use custom tip if available
-    if (tipShape === BrushTipShape.CUSTOM && this.customTip) {
+    // Use custom tip if available (but not for mask painting)
+    if (!this.isPaintingMask && tipShape === BrushTipShape.CUSTOM && this.customTip) {
       this.customTip.draw(ctx, dab.x, dab.y, size, color, opacity, angle, roundness);
       return;
     }
@@ -368,8 +443,17 @@ export class BrushTool extends BaseTool {
       // Soft brush with radial gradient
       const gradient = ctx.createRadialGradient(0, 0, 0, 0, 0, radius);
 
-      // Parse color to RGB
-      const rgb = this.hexToRgb(color);
+      // Parse color to RGB for gradient
+      let rgb;
+      if (this.isPaintingMask) {
+        const fg = this.store.state.colors.foreground;
+        const fgRgb = this.hexToRgb(fg);
+        const brightness = Math.round((fgRgb.r + fgRgb.g + fgRgb.b) / 3);
+        rgb = { r: brightness, g: brightness, b: brightness };
+      } else {
+        rgb = this.hexToRgb(color);
+      }
+
       const innerColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${opacity})`;
       const midColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, ${opacity * hardness})`;
       const outerColor = `rgba(${rgb.r}, ${rgb.g}, ${rgb.b}, 0)`;
