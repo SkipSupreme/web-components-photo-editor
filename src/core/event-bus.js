@@ -156,6 +156,10 @@ export const Events = {
   LAYER_REORDERED: 'layer:reordered',
   LAYER_VISIBILITY_CHANGED: 'layer:visibility',
 
+  // Adjustment layer events
+  ADJUSTMENT_LAYER_CREATED: 'adjustment:created',
+  ADJUSTMENT_LAYER_UPDATED: 'adjustment:updated',
+
   // Tool events
   TOOL_CHANGED: 'tool:changed',
   TOOL_OPTIONS_CHANGED: 'tool:options',
@@ -168,6 +172,15 @@ export const Events = {
   // Selection events
   SELECTION_CHANGED: 'selection:changed',
   SELECTION_CLEARED: 'selection:cleared',
+  SELECTION_INVERTED: 'selection:inverted',
+  SELECTION_PREVIEW_START: 'selection:preview:start',
+  SELECTION_PREVIEW_UPDATE: 'selection:preview:update',
+  SELECTION_PREVIEW_END: 'selection:preview:end',
+
+  // Transform events
+  TRANSFORM_START: 'transform:start',
+  TRANSFORM_UPDATE: 'transform:update',
+  TRANSFORM_END: 'transform:end',
 
   // History events
   HISTORY_PUSH: 'history:push',
@@ -197,6 +210,7 @@ export const Events = {
   FILE_IMPORT_ERROR: 'file:import:error',
   FILE_EXPORT_START: 'file:export:start',
   FILE_EXPORT_COMPLETE: 'file:export:complete',
+  FILE_EXPORT_ERROR: 'file:export:error',
 
   // Canvas events
   CANVAS_POINTER_DOWN: 'canvas:pointer:down',

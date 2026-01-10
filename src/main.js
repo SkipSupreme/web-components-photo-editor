@@ -10,8 +10,8 @@ import { getHistory } from './core/commands.js';
 import { getShortcuts, ShortcutContext } from './core/shortcuts.js';
 
 // Document
-import { Document, createDocument, createDocumentFromImage } from './document/document.js';
-import { createRasterLayer, createLayerFromImage } from './document/layer.js';
+import { createDocument, createDocumentFromImage } from './document/document.js';
+import { createRasterLayer } from './document/layer.js';
 
 // Tools
 import { getToolManager } from './tools/tool-manager.js';
@@ -20,13 +20,51 @@ import { EraserTool } from './tools/eraser-tool.js';
 import { MoveTool } from './tools/move-tool.js';
 import { EyedropperTool } from './tools/eyedropper-tool.js';
 import { FillTool } from './tools/fill-tool.js';
+import { RectangularMarqueeTool, EllipticalMarqueeTool } from './tools/selection/marquee-tool.js';
+import { LassoTool, PolygonalLassoTool } from './tools/selection/lasso-tool.js';
+import { MagicWandTool } from './tools/selection/magic-wand-tool.js';
+import { TransformTool } from './tools/transform-tool.js';
+import { GradientTool } from './tools/gradient-tool.js';
+import { CropTool } from './tools/crop-tool.js';
 
 // Components
 import './components/app-shell.js';
 import './components/canvas/editor-canvas.js';
+import './components/canvas/canvas-overlay.js';
 import './components/panels/layers-panel.js';
 import './components/panels/color-panel.js';
 import './components/panels/history-panel.js';
+import './components/panels/brushes-panel.js';
+import './components/panels/adjustments-panel.js';
+
+// Dialogs
+import './components/dialogs/export-dialog.js';
+import './components/dialogs/recent-documents-dialog.js';
+import './components/dialogs/shortcuts-dialog.js';
+import './components/dialogs/settings-dialog.js';
+import './components/dialogs/new-document-dialog.js';
+import { showExportDialog } from './components/dialogs/export-dialog.js';
+import { showRecentDocumentsDialog } from './components/dialogs/recent-documents-dialog.js';
+import { showShortcutsDialog } from './components/dialogs/shortcuts-dialog.js';
+import { showSettingsDialog } from './components/dialogs/settings-dialog.js';
+import { showNewDocumentDialog as openNewDocumentDialog } from './components/dialogs/new-document-dialog.js';
+
+// Shared components
+import './components/shared/loading-indicator.js';
+import { getLoadingIndicator } from './components/shared/loading-indicator.js';
+
+// File I/O
+import { importImageAsDocument } from './io/image-import.js';
+import { importPSD } from './io/psd/psd-import.js';
+
+// Storage
+import { openDatabase } from './storage/db.js';
+import { saveProject, loadProject } from './storage/project-store.js';
+import { initAutosave, checkForRecovery } from './storage/autosave.js';
+
+// Theme and accessibility
+import { initThemeManager } from './core/theme-manager.js';
+import { initAccessibility } from './core/accessibility.js';
 
 /**
  * Main Photo Editor Application
@@ -39,6 +77,7 @@ class PhotoEditorApp {
     this.shortcuts = null;
     this.toolManager = null;
     this.document = null;
+    this.selection = null;
   }
 
   /**
@@ -52,6 +91,23 @@ class PhotoEditorApp {
 
     // Initialize event bus
     this.eventBus = getEventBus();
+
+    // Initialize database
+    try {
+      await openDatabase();
+      console.log('IndexedDB initialized');
+    } catch (error) {
+      console.warn('Failed to initialize IndexedDB:', error);
+    }
+
+    // Initialize theme
+    await initThemeManager();
+
+    // Initialize accessibility
+    initAccessibility();
+
+    // Initialize loading indicator
+    getLoadingIndicator();
 
     // Initialize history
     this.history = getHistory();
@@ -70,13 +126,20 @@ class PhotoEditorApp {
     // Set up event handlers
     this.setupEventHandlers();
 
-    // Create default document
-    this.newDocument({
-      width: 1920,
-      height: 1080,
-      name: 'Untitled',
-      backgroundColor: '#ffffff'
-    });
+    // Check for recovery or create default document
+    const recoveryData = await checkForRecovery();
+    if (recoveryData) {
+      // Show recovery dialog
+      showRecentDocumentsDialog();
+    } else {
+      // Create default document
+      this.newDocument({
+        width: 1920,
+        height: 1080,
+        name: 'Untitled',
+        backgroundColor: '#ffffff'
+      });
+    }
 
     // Set default tool
     this.setTool('brush');
@@ -91,12 +154,26 @@ class PhotoEditorApp {
    * Register all tools
    */
   registerTools() {
+    // Paint tools
     this.toolManager.register('brush', new BrushTool());
     this.toolManager.register('eraser', new EraserTool());
-    this.toolManager.register('move', new MoveTool());
-    this.toolManager.register('eyedropper', new EyedropperTool());
     this.toolManager.register('fill', new FillTool());
-    // Additional tools can be registered here
+    this.toolManager.register('eyedropper', new EyedropperTool());
+
+    // Selection tools
+    this.toolManager.register('marquee', new RectangularMarqueeTool());
+    this.toolManager.register('ellipticalMarquee', new EllipticalMarqueeTool());
+    this.toolManager.register('lasso', new LassoTool());
+    this.toolManager.register('polygonalLasso', new PolygonalLassoTool());
+    this.toolManager.register('magicWand', new MagicWandTool());
+
+    // Transform tools
+    this.toolManager.register('move', new MoveTool());
+    this.toolManager.register('transform', new TransformTool());
+    this.toolManager.register('crop', new CropTool());
+
+    // Gradient tool
+    this.toolManager.register('gradient', new GradientTool());
   }
 
   /**
@@ -212,6 +289,14 @@ class PhotoEditorApp {
     this.eventBus.on('toolbar:undo', () => this.undo());
     this.eventBus.on('toolbar:redo', () => this.redo());
 
+    // Project handlers
+    this.eventBus.on('project:load', (data) => this.loadProjectData(data));
+    this.eventBus.on('project:recover', (data) => this.recoverProject(data));
+    this.eventBus.on('project:save', () => this.saveProjectToStorage());
+
+    // New document dialog
+    this.eventBus.on('new-document:create', (options) => this.newDocument(options));
+
     // Handle file drops
     document.addEventListener('dragover', (e) => {
       e.preventDefault();
@@ -244,15 +329,16 @@ class PhotoEditorApp {
     // Clear history
     this.history.clear();
 
+    // Initialize autosave for this document
+    initAutosave(this.document);
+
     this.eventBus.emit(Events.DOCUMENT_CREATED, { document: this.document });
 
     return this.document;
   }
 
   showNewDocumentDialog() {
-    // For now, just create a default document
-    // TODO: Show actual dialog
-    this.newDocument();
+    openNewDocumentDialog();
   }
 
   /**
@@ -269,22 +355,28 @@ class PhotoEditorApp {
               accept: {
                 'image/*': ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.bmp']
               }
+            },
+            {
+              description: 'Photoshop Files',
+              accept: {
+                'image/vnd.adobe.photoshop': ['.psd']
+              }
             }
           ]
         });
 
         const file = await handle.getFile();
-        await this.loadImageFile(file);
+        await this.loadFile(file);
       } else {
         // Fallback to input element
         const input = document.createElement('input');
         input.type = 'file';
-        input.accept = 'image/*';
+        input.accept = 'image/*,.psd';
 
         input.onchange = async (e) => {
           const file = e.target.files[0];
           if (file) {
-            await this.loadImageFile(file);
+            await this.loadFile(file);
           }
         };
 
@@ -294,6 +386,42 @@ class PhotoEditorApp {
       if (error.name !== 'AbortError') {
         console.error('Error opening file:', error);
       }
+    }
+  }
+
+  /**
+   * Load a file (image or PSD)
+   */
+  async loadFile(file) {
+    const extension = file.name.split('.').pop().toLowerCase();
+
+    if (extension === 'psd') {
+      await this.loadPSDFile(file);
+    } else {
+      await this.loadImageFile(file);
+    }
+  }
+
+  /**
+   * Load a PSD file
+   */
+  async loadPSDFile(file) {
+    try {
+      this.eventBus.emit(Events.FILE_IMPORT_START, { format: 'psd' });
+
+      this.document = await importPSD(file);
+      this.document.syncToStore();
+      this.history.clear();
+
+      this.eventBus.emit(Events.FILE_IMPORT_COMPLETE, { format: 'psd' });
+      this.eventBus.emit(Events.DOCUMENT_OPENED, { document: this.document });
+      this.eventBus.emit(Events.RENDER_REQUEST);
+
+      return this.document;
+    } catch (error) {
+      console.error('Error loading PSD:', error);
+      this.eventBus.emit(Events.FILE_IMPORT_ERROR, { error, format: 'psd' });
+      throw error;
     }
   }
 
@@ -335,8 +463,10 @@ class PhotoEditorApp {
     if (files.length === 0) return;
 
     const file = files[0];
-    if (file.type.startsWith('image/')) {
-      await this.loadImageFile(file);
+    const extension = file.name.split('.').pop().toLowerCase();
+
+    if (extension === 'psd' || file.type.startsWith('image/')) {
+      await this.loadFile(file);
     }
   }
 
@@ -344,14 +474,30 @@ class PhotoEditorApp {
    * Save the document
    */
   async save() {
-    // For now, just export as PNG
-    await this.export();
+    // Quick export as PNG
+    await this.quickExport();
   }
 
   /**
-   * Export the document
+   * Export the document - shows the export dialog
    */
-  async export(format = 'image/png') {
+  async export() {
+    if (!this.document) return;
+    showExportDialog(this.document);
+  }
+
+  /**
+   * Save As - show export dialog for Save As functionality
+   */
+  async saveAs() {
+    if (!this.document) return;
+    showExportDialog(this.document);
+  }
+
+  /**
+   * Quick export as PNG (for Ctrl+S)
+   */
+  async quickExport(format = 'image/png') {
     if (!this.document) return;
 
     try {
@@ -508,6 +654,10 @@ class PhotoEditorApp {
     this.eventBus.emit('toolbar:zoom-out');
   }
 
+  actualSize() {
+    this.eventBus.emit('toolbar:actual-size');
+  }
+
   fitToScreen() {
     this.eventBus.emit('toolbar:fit');
   }
@@ -515,7 +665,19 @@ class PhotoEditorApp {
   // ========== Selection Operations ==========
 
   selectAll() {
-    // TODO: Implement selection
+    if (!this.document) return;
+
+    // Create a selection covering the entire document
+    const selection = {
+      type: 'rectangle',
+      x: 0,
+      y: 0,
+      width: this.document.width,
+      height: this.document.height
+    };
+
+    this.store.state.document.selection = selection;
+    this.eventBus.emit(Events.SELECTION_CHANGED, { selection });
   }
 
   deselect() {
@@ -524,11 +686,48 @@ class PhotoEditorApp {
   }
 
   invertSelection() {
-    // TODO: Implement
+    if (!this.document) return;
+
+    const currentSelection = this.store.state.document.selection;
+    if (!currentSelection) {
+      // No selection to invert - select all
+      this.selectAll();
+      return;
+    }
+
+    // Emit invert event - canvas overlay will handle the masking
+    this.eventBus.emit(Events.SELECTION_INVERTED, { selection: currentSelection });
   }
 
   deleteSelected() {
-    // TODO: Delete selection or active layer content
+    if (!this.document) return;
+
+    const selection = this.store.state.document.selection;
+    const activeLayer = this.document.getActiveLayer();
+
+    if (!activeLayer || activeLayer.type !== 'raster') return;
+
+    if (selection) {
+      // Clear the selected area on the active layer
+      const ctx = activeLayer.ctx;
+      ctx.save();
+      ctx.globalCompositeOperation = 'destination-out';
+
+      if (selection.type === 'rectangle') {
+        ctx.fillRect(selection.x, selection.y, selection.width, selection.height);
+      } else if (selection.path) {
+        // For complex selections (lasso, magic wand)
+        ctx.fill(selection.path);
+      }
+
+      ctx.restore();
+    } else {
+      // No selection - clear entire layer
+      activeLayer.ctx.clearRect(0, 0, activeLayer.width, activeLayer.height);
+    }
+
+    this.eventBus.emit(Events.LAYER_UPDATED, { layer: activeLayer });
+    this.eventBus.emit(Events.RENDER_REQUEST);
   }
 
   cancelOperation() {
@@ -536,7 +735,210 @@ class PhotoEditorApp {
   }
 
   startTransform() {
-    // TODO: Implement transform tool
+    if (!this.document) return;
+
+    // Switch to transform tool
+    this.setTool('transform');
+
+    // Emit event to initialize transform on active layer
+    this.eventBus.emit(Events.TRANSFORM_START, {
+      layerId: this.document.activeLayerId
+    });
+  }
+
+  // ========== Project Storage Operations ==========
+
+  /**
+   * Save project to IndexedDB
+   */
+  async saveProjectToStorage() {
+    if (!this.document) return;
+
+    try {
+      const projectId = await saveProject(this.document);
+      this.document.id = projectId;
+      console.log('Project saved:', projectId);
+      this.eventBus.emit(Events.DOCUMENT_SAVED, { document: this.document });
+    } catch (error) {
+      console.error('Failed to save project:', error);
+    }
+  }
+
+  /**
+   * Load project from stored data
+   */
+  async loadProjectData(data) {
+    try {
+      // Create document from project data
+      this.document = createDocument({
+        id: data.project.id,
+        width: data.project.width,
+        height: data.project.height,
+        name: data.project.name,
+        backgroundColor: data.project.background?.color || '#ffffff',
+        transparentBackground: data.project.background?.transparent || false
+      });
+
+      // Restore layers
+      await this.restoreLayersFromData(data.layers);
+
+      // Sync to store
+      this.document.syncToStore();
+
+      // Clear history
+      this.history.clear();
+
+      // Initialize autosave
+      initAutosave(this.document);
+
+      this.eventBus.emit(Events.DOCUMENT_OPENED, { document: this.document });
+      this.eventBus.emit(Events.RENDER_REQUEST);
+    } catch (error) {
+      console.error('Failed to load project:', error);
+    }
+  }
+
+  /**
+   * Recover project from autosave data
+   */
+  async recoverProject(data) {
+    try {
+      // Create document from recovery data
+      this.document = createDocument({
+        id: data.id,
+        width: data.width,
+        height: data.height,
+        name: data.name,
+        backgroundColor: '#ffffff'
+      });
+
+      // Restore layers
+      await this.restoreLayersFromData(data.layers);
+
+      // Sync to store
+      this.document.syncToStore();
+
+      // Clear history
+      this.history.clear();
+
+      // Initialize autosave
+      initAutosave(this.document);
+
+      this.eventBus.emit(Events.DOCUMENT_OPENED, { document: this.document });
+      this.eventBus.emit(Events.RENDER_REQUEST);
+
+      console.log('Document recovered successfully');
+    } catch (error) {
+      console.error('Failed to recover project:', error);
+    }
+  }
+
+  /**
+   * Restore layers from stored data
+   */
+  async restoreLayersFromData(layersData) {
+    // Clear existing layers
+    this.document.layers = [];
+
+    // Group layers by parent
+    const rootLayers = layersData.filter(l => !l.parentId);
+    const childMap = new Map();
+
+    for (const layer of layersData) {
+      if (layer.parentId) {
+        if (!childMap.has(layer.parentId)) {
+          childMap.set(layer.parentId, []);
+        }
+        childMap.get(layer.parentId).push(layer);
+      }
+    }
+
+    // Create layers
+    for (const layerData of rootLayers) {
+      const layer = await this.createLayerFromData(layerData);
+      if (layer) {
+        // Add children if group
+        if (layer.type === 'group' && childMap.has(layerData.id)) {
+          for (const childData of childMap.get(layerData.id)) {
+            const child = await this.createLayerFromData(childData);
+            if (child) {
+              layer.addChild(child);
+            }
+          }
+        }
+        this.document.layers.push(layer);
+      }
+    }
+
+    // Set active layer
+    if (this.document.layers.length > 0) {
+      this.document.setActiveLayer(this.document.layers[0].id);
+    }
+  }
+
+  /**
+   * Create a layer from stored data
+   */
+  async createLayerFromData(data) {
+    const { createRasterLayer, createAdjustmentLayer, createLayerGroup, LayerType } = await import('./document/layer.js');
+
+    let layer;
+
+    switch (data.type) {
+      case LayerType.RASTER:
+      case 'raster':
+        layer = createRasterLayer(data.name, data.width, data.height);
+        // Restore image data
+        if (data.imageData) {
+          layer.ctx.putImageData(data.imageData, 0, 0);
+        }
+        break;
+
+      case LayerType.ADJUSTMENT:
+      case 'adjustment':
+        layer = createAdjustmentLayer(data.adjustment?.type || 'brightness-contrast', data.name);
+        if (data.adjustment) {
+          layer.adjustment = { ...data.adjustment };
+        }
+        break;
+
+      case LayerType.GROUP:
+      case 'group':
+        layer = createLayerGroup(data.name);
+        layer.expanded = data.expanded !== false;
+        break;
+
+      default:
+        console.warn('Unknown layer type:', data.type);
+        return null;
+    }
+
+    // Restore common properties
+    layer.id = data.id;
+    layer.visible = data.visible !== false;
+    layer.opacity = data.opacity ?? 1;
+    layer.blendMode = data.blendMode || 'normal';
+    layer.x = data.x || 0;
+    layer.y = data.y || 0;
+    layer.locked = data.locked || false;
+    layer.clipped = data.clipped || false;
+
+    // Restore mask
+    if (data.maskData) {
+      layer.mask = new OffscreenCanvas(data.width, data.height);
+      const maskCtx = layer.mask.getContext('2d');
+      maskCtx.putImageData(data.maskData, 0, 0);
+      layer.maskEnabled = data.maskEnabled !== false;
+    }
+
+    return layer;
+  }
+
+  /**
+   * Show recent documents dialog
+   */
+  showRecentDocuments() {
+    showRecentDocumentsDialog();
   }
 }
 

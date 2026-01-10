@@ -2,14 +2,143 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="description" content="Professional-grade image editor in your browser">
+  <meta name="theme-color" content="#1a1a1a">
+  <meta name="color-scheme" content="dark">
+
+  <!-- PWA Meta Tags -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Photo Editor">
+  <meta name="application-name" content="Photo Editor">
+  <meta name="msapplication-TileColor" content="#1a1a1a">
+
   <title>Photo Editor</title>
+
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="/manifest.json">
+
+  <!-- Icons -->
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/icons/icon-32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/assets/icons/icon-16.png">
+  <link rel="apple-touch-icon" href="/assets/icons/icon-192.png">
+
+  <!-- Stylesheets -->
   <link rel="stylesheet" href="styles/main.css">
   <link rel="stylesheet" href="styles/themes/dark.css">
+
+  <!-- Preload critical resources -->
+  <link rel="modulepreload" href="src/main.js">
+  <link rel="modulepreload" href="src/core/store.js">
+  <link rel="modulepreload" href="src/core/event-bus.js">
 </head>
 <body>
   <app-shell></app-shell>
 
   <script type="module" src="src/main.js"></script>
+
+  <!-- Service Worker Registration -->
+  <script>
+    // Register service worker for offline support
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', async () => {
+        try {
+          const registration = await navigator.serviceWorker.register('/sw.js', {
+            scope: '/'
+          });
+
+          console.log('Service Worker registered:', registration.scope);
+
+          // Handle updates
+          registration.addEventListener('updatefound', () => {
+            const newWorker = registration.installing;
+            console.log('Service Worker update found');
+
+            newWorker.addEventListener('statechange', () => {
+              if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                // New content available, show update notification
+                showUpdateNotification();
+              }
+            });
+          });
+        } catch (error) {
+          console.error('Service Worker registration failed:', error);
+        }
+      });
+
+      // Handle controller change (new SW activated)
+      navigator.serviceWorker.addEventListener('controllerchange', () => {
+        console.log('New Service Worker activated');
+      });
+    }
+
+    // Show update notification
+    function showUpdateNotification() {
+      const notification = document.createElement('div');
+      notification.className = 'update-notification';
+      notification.innerHTML = `
+        <span>A new version is available!</span>
+        <button onclick="location.reload()">Refresh</button>
+        <button onclick="this.parentElement.remove()">Dismiss</button>
+      `;
+      notification.style.cssText = `
+        position: fixed;
+        bottom: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #3b82f6;
+        color: white;
+        padding: 12px 20px;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        z-index: 10000;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        font-family: system-ui, sans-serif;
+        font-size: 14px;
+      `;
+      const buttons = notification.querySelectorAll('button');
+      buttons.forEach(btn => {
+        btn.style.cssText = `
+          background: rgba(255,255,255,0.2);
+          border: none;
+          color: white;
+          padding: 6px 12px;
+          border-radius: 4px;
+          cursor: pointer;
+          font-size: 13px;
+        `;
+      });
+      document.body.appendChild(notification);
+    }
+
+    // Handle online/offline status
+    window.addEventListener('online', () => {
+      document.body.classList.remove('offline');
+      console.log('Back online');
+    });
+
+    window.addEventListener('offline', () => {
+      document.body.classList.add('offline');
+      console.log('Gone offline');
+    });
+
+    // Request persistent storage on first visit
+    if (navigator.storage && navigator.storage.persist) {
+      navigator.storage.persisted().then(persisted => {
+        if (!persisted) {
+          // Only request after user interaction
+          document.addEventListener('click', async function requestPersist() {
+            const granted = await navigator.storage.persist();
+            console.log('Persistent storage:', granted ? 'granted' : 'denied');
+            document.removeEventListener('click', requestPersist);
+          }, { once: true });
+        }
+      });
+    }
+  </script>
 </body>
 </html>

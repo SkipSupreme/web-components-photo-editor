@@ -3,6 +3,8 @@
  * Supports raster layers, adjustment layers, and groups
  */
 
+import { LayerMask } from './mask.js';
+
 let layerIdCounter = 0;
 
 export const LayerType = {
@@ -166,15 +168,11 @@ export class Layer {
    * Create a mask for this layer
    */
   createMask(fillWhite = true) {
-    this.mask = new OffscreenCanvas(this.width, this.height);
-    const ctx = this.mask.getContext('2d');
-
-    if (fillWhite) {
-      ctx.fillStyle = 'white';
-      ctx.fillRect(0, 0, this.width, this.height);
-    }
-
+    this.mask = new LayerMask(this.width, this.height, {
+      fillBlack: !fillWhite
+    });
     this.maskEnabled = true;
+    this.maskLinked = true;
     this.dirty = true;
   }
 
@@ -183,6 +181,7 @@ export class Layer {
    */
   removeMask() {
     this.mask = null;
+    this.maskEnabled = false;
     this.dirty = true;
   }
 
@@ -192,20 +191,31 @@ export class Layer {
   applyMask() {
     if (!this.mask || !this.ctx) return;
 
-    const maskCtx = this.mask.getContext('2d');
-    const maskData = maskCtx.getImageData(0, 0, this.width, this.height);
+    // Use LayerMask's apply method
     const layerData = this.ctx.getImageData(0, 0, this.width, this.height);
+    const maskedData = this.mask.apply(layerData);
 
-    for (let i = 0; i < layerData.data.length; i += 4) {
-      // Use mask luminance to affect alpha
-      const maskAlpha = maskData.data[i]; // Red channel as grayscale
-      layerData.data[i + 3] = Math.round(layerData.data[i + 3] * (maskAlpha / 255));
-    }
-
-    this.ctx.putImageData(layerData, 0, 0);
+    this.ctx.putImageData(maskedData, 0, 0);
     this.mask = null;
+    this.maskEnabled = false;
     this.dirty = true;
     this.updateThumbnail();
+  }
+
+  /**
+   * Get the rendered layer with mask applied (non-destructive)
+   */
+  getRenderedImageData() {
+    if (!this.ctx) return null;
+
+    const layerData = this.ctx.getImageData(0, 0, this.width, this.height);
+
+    // Apply mask if enabled
+    if (this.mask && this.maskEnabled) {
+      return this.mask.apply(layerData);
+    }
+
+    return layerData;
   }
 
   /**
@@ -265,9 +275,9 @@ export class Layer {
     }
 
     if (this.mask) {
-      cloned.createMask(false);
-      const maskCtx = cloned.mask.getContext('2d');
-      maskCtx.drawImage(this.mask, 0, 0);
+      cloned.mask = this.mask.clone();
+      cloned.maskEnabled = this.maskEnabled;
+      cloned.maskLinked = this.maskLinked;
     }
 
     return cloned;
@@ -345,3 +355,108 @@ export function createAdjustmentLayer(type, params = {}) {
     }
   });
 }
+
+/**
+ * Create a layer group (folder)
+ */
+export function createLayerGroup(name = 'Group') {
+  const group = new Layer({
+    name,
+    type: LayerType.GROUP
+  });
+  group.children = [];
+  group.expanded = true;
+  return group;
+}
+
+/**
+ * LayerGroup - Container for layers with additional group functionality
+ */
+export class LayerGroup extends Layer {
+  constructor(options = {}) {
+    super({
+      ...options,
+      type: LayerType.GROUP
+    });
+    this.children = options.children ?? [];
+    this.expanded = options.expanded ?? true;
+    this.passThrough = options.passThrough ?? true; // Pass-through blend mode
+  }
+
+  /**
+   * Add a layer to this group
+   */
+  addChild(layer, index = -1) {
+    layer.parentId = this.id;
+    if (index === -1) {
+      this.children.push(layer);
+    } else {
+      this.children.splice(index, 0, layer);
+    }
+  }
+
+  /**
+   * Remove a layer from this group
+   */
+  removeChild(layerId) {
+    const index = this.children.findIndex(l => l.id === layerId);
+    if (index !== -1) {
+      const [layer] = this.children.splice(index, 1);
+      layer.parentId = null;
+      return layer;
+    }
+    return null;
+  }
+
+  /**
+   * Get all layers in this group (flattened)
+   */
+  getAllLayers() {
+    const layers = [];
+    for (const child of this.children) {
+      layers.push(child);
+      if (child instanceof LayerGroup) {
+        layers.push(...child.getAllLayers());
+      }
+    }
+    return layers;
+  }
+
+  /**
+   * Toggle group expansion
+   */
+  toggleExpanded() {
+    this.expanded = !this.expanded;
+  }
+
+  /**
+   * Clone this group and all children
+   */
+  clone() {
+    const cloned = new LayerGroup({
+      name: `${this.name} Copy`,
+      visible: this.visible,
+      opacity: this.opacity,
+      blendMode: this.blendMode,
+      expanded: this.expanded,
+      passThrough: this.passThrough
+    });
+
+    for (const child of this.children) {
+      const clonedChild = child.clone();
+      cloned.addChild(clonedChild);
+    }
+
+    return cloned;
+  }
+
+  toJSON() {
+    return {
+      ...super.toJSON(),
+      expanded: this.expanded,
+      passThrough: this.passThrough,
+      children: this.children.map(c => c.toJSON())
+    };
+  }
+}
+

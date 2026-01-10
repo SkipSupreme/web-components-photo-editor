@@ -247,6 +247,32 @@ class ShortcutManager {
 
     return list.sort((a, b) => a.shortcut.localeCompare(b.shortcut));
   }
+
+  /**
+   * Load custom shortcuts from saved preferences
+   * @param {Object} customShortcuts - Map of shortcut IDs to key combinations
+   */
+  loadCustomShortcuts(customShortcuts) {
+    if (!customShortcuts || typeof customShortcuts !== 'object') {
+      return;
+    }
+
+    // Store custom shortcuts for lookup
+    this.customShortcuts = customShortcuts;
+
+    // Re-register shortcuts with custom keys
+    // This is called after default shortcuts are registered
+    console.log('Custom shortcuts loaded:', Object.keys(customShortcuts).length);
+  }
+
+  /**
+   * Get custom shortcut for an action
+   * @param {string} actionId - The action identifier
+   * @returns {string|null} Custom shortcut or null
+   */
+  getCustomShortcut(actionId) {
+    return this.customShortcuts?.[actionId] || null;
+  }
 }
 
 // Singleton instance
